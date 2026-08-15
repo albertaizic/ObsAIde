@@ -1,0 +1,15 @@
+/*
+ * ObsAIde styles.
+ *
+ * Everything here is expressed in Obsidian's own CSS variables so the plugin
+ * inherits light mode, dark mode and third-party themes. Do not introduce
+ * hardcoded colours.
+ */
+
+.obsaide-view {
+	--obsaide-gap: var(--size-4-2);
+	--obsaide-radius: var(--radius-m);
+	--obsaide-surface: var(--background-secondary);
+	--obsaide-surface-alt: var(--background-primary-alt);
+	--obsaide-border: var(--background-modifier-border);
+}
