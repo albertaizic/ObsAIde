@@ -16,6 +16,9 @@
 - Never log, display or transmit an API key. Anything that reaches the user goes through `redactSecrets` first.
 - No note is read unless the user attached it. No background scanning, no indexing, no telemetry.
 - AI output must never be written to a note without an explicit user action.
+- Context is Markdown notes only. Do not add handling for other file types; the vault's Markdown index is the input, so nothing else can enter the pipeline.
+- Never resolve the target of an edit from whichever leaf has focus. Focus has already moved by then. Capture a `NoteEditAnchor` when the request is made and resolve it through `actions/edit-target.ts`.
+- Sampling parameters are decided in `providers/capabilities.ts`, never in the UI or in individual adapters.
 
 ## Environment & tooling
 
