@@ -21,6 +21,7 @@ import { isProviderConfigured } from '../settings/types';
 import { summarize } from '../utils/text';
 import { Composer } from './composer';
 import { ConversationPickerModal } from './conversation-picker';
+import { EditPreviewModal } from './edit-preview';
 import { MessageList } from './message-list';
 import { ModelPickerModal } from './model-picker';
 import { NotePickerModal } from './note-picker';
@@ -74,6 +75,12 @@ export class AideChatView extends ItemView {
 		this.messageList = new MessageList(this.app, this.messagesEl, this, {
 			onRegenerate: () => void this.controller.regenerate(),
 			onOpenSettings: () => this.plugin.openSettings(),
+			onUseInNote: (message) => {
+				new EditPreviewModal(this.app, {
+					proposedText: message.text,
+					proposal: message.proposal,
+				}).open();
+			},
 		});
 		this.composer = new Composer(root, {
 			onSend: (text) => void this.send({ displayText: text }),

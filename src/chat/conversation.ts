@@ -15,6 +15,8 @@ export interface EditProposalTarget {
 	originalText: string;
 	from: { line: number; ch: number };
 	to: { line: number; ch: number };
+	/** Whether the range was a selection or the whole document. */
+	scope: 'selection' | 'document';
 }
 
 export interface MessageError {

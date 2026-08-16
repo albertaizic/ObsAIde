@@ -706,3 +706,93 @@
 	margin-top: var(--size-4-3);
 	flex-wrap: wrap;
 }
+
+.obsaide-modal-footer.is-actions {
+	justify-content: flex-end;
+}
+
+/* -------------------------------------------------------- edit review modal */
+
+.obsaide-proposal {
+	display: flex;
+	gap: var(--size-4-1);
+}
+
+.obsaide-tabs {
+	display: flex;
+	gap: var(--size-4-1);
+	margin-bottom: var(--size-4-2);
+}
+
+.obsaide-tab {
+	all: unset;
+	cursor: pointer;
+	padding: 2px var(--size-4-2);
+	border-radius: var(--radius-s);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	border: 1px solid transparent;
+}
+
+.obsaide-tab:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.obsaide-tab.is-active {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-form-field);
+	border-color: var(--background-modifier-border);
+}
+
+.obsaide-tab:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.obsaide-edit-body {
+	max-height: 45vh;
+	overflow: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+}
+
+.obsaide-edit-body .obsaide-preview-body {
+	border: none;
+	margin: 0;
+	max-height: none;
+}
+
+.obsaide-diff {
+	font-family: var(--font-monospace);
+	font-size: var(--font-smaller);
+	line-height: var(--line-height-tight);
+	min-width: max-content;
+}
+
+.obsaide-diff-line {
+	display: flex;
+	gap: var(--size-4-1);
+	padding: 0 var(--size-4-2);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.obsaide-diff-line.is-add {
+	background-color: var(--background-modifier-success);
+}
+
+.obsaide-diff-line.is-remove {
+	background-color: var(--background-modifier-error);
+}
+
+.obsaide-diff-marker {
+	flex: 0 0 auto;
+	width: 1ch;
+	color: var(--text-faint);
+	user-select: none;
+}
+
+.obsaide-diff-text {
+	flex: 1 1 auto;
+	min-width: 0;
+}

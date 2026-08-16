@@ -1,8 +1,11 @@
 import { Notice, type Editor, type MarkdownFileInfo, type MarkdownView } from 'obsidian';
+import { AIDE_ACTIONS } from './actions/registry';
+import { canRunActions, runAction } from './actions/runner';
 import { ASSISTANT_NAME } from './constants';
 import { captureNote, captureSelection, getEditorTarget } from './context/collect';
 import type { Attachment } from './context/types';
 import type ObsAidePlugin from './main';
+import { ActionPickerModal } from './ui/action-picker';
 import { AskAideModal } from './ui/ask-modal';
 
 /**
@@ -52,6 +55,18 @@ export function registerCommands(plugin: ObsAidePlugin): void {
 		name: `Ask ${ASSISTANT_NAME}`,
 		callback: () => openAskAide(plugin),
 	});
+
+	for (const action of AIDE_ACTIONS) {
+		plugin.addCommand({
+			id: `action-${action.id}`,
+			name: action.commandName,
+			checkCallback: (checking: boolean) => {
+				if (!canRunActions(plugin)) return false;
+				if (!checking) void runAction(plugin, action);
+				return true;
+			},
+		});
+	}
 }
 
 /** Add ObsAIde entries to the editor context menu. */
@@ -62,14 +77,11 @@ export function registerEditorMenu(plugin: ObsAidePlugin): void {
 			(menu, editor: Editor, info: MarkdownView | MarkdownFileInfo) => {
 				const file = info.file ?? null;
 				const selection = captureSelection(editor, file);
-				const attachments = selection
-					? [selection]
-					: file
-						? [captureNote(file)]
-						: [];
+				const attachments = selection ? [selection] : file ? [captureNote(file)] : [];
 
 				menu.addItem((item) =>
 					item
+						.setSection('obsaide')
 						.setTitle(
 							selection
 								? `Ask ${ASSISTANT_NAME} about this`
@@ -77,6 +89,18 @@ export function registerEditorMenu(plugin: ObsAidePlugin): void {
 						)
 						.setIcon('sparkles')
 						.onClick(() => openAskAide(plugin, attachments)),
+				);
+
+				menu.addItem((item) =>
+					item
+						.setSection('obsaide')
+						.setTitle(`${ASSISTANT_NAME} actions…`)
+						.setIcon('wand-sparkles')
+						.onClick(() => {
+							new ActionPickerModal(plugin.app, (action) =>
+								void runAction(plugin, action),
+							).open();
+						}),
 				);
 			},
 		),

@@ -180,6 +180,18 @@ export class MessageList {
 		isLastAssistant: boolean,
 	): void {
 		if (!message.text.trim()) return;
+
+		// A reply that was generated to replace note content gets a real button:
+		// applying it is the expected next step, but it still opens a review.
+		if (message.proposal && this.callbacks.onUseInNote) {
+			const review = parent.createDiv({ cls: 'obsaide-proposal' });
+			const button = review.createEl('button', {
+				cls: 'obsaide-button is-small',
+				text: 'Review change…',
+			});
+			button.addEventListener('click', () => this.callbacks.onUseInNote?.(message));
+		}
+
 		const actions = parent.createDiv({ cls: 'obsaide-message-actions' });
 
 		this.iconButton(actions, 'copy', 'Copy reply', () => {
