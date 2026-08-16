@@ -1,21 +1,24 @@
-import { Modal, Notice, setIcon, type App } from 'obsidian';
+import { Modal, Notice, setIcon, type App, type MarkdownView } from 'obsidian';
+import type { NoteEditAnchor } from '../actions/anchor';
 import {
-	getActiveEditor,
-	insertAfter,
-	insertAtCursor,
-	replaceRange,
-	resolveProposalTarget,
-	type ProposalTarget,
-} from '../actions/apply';
-import type { EditProposalTarget } from '../chat/conversation';
+	insertAtAnchor,
+	insertBelowSelection,
+	replaceSelection,
+	resolveEditTarget,
+	type ResolvedEditTarget,
+} from '../actions/edit-target';
 import { collapseDiff, diffLines, summarizeDiff } from '../utils/diff';
 import { copyToClipboard } from './markdown';
 
 export interface EditPreviewOptions {
 	/** Markdown produced by Aide. */
 	proposedText: string;
-	/** Where it came from, when the reply can replace note content. */
-	proposal?: EditProposalTarget;
+	/** The note, caret and selection the reply came from. */
+	anchor?: NoteEditAnchor;
+	/** The reply was generated to replace the anchored text. */
+	replacesAnchor?: boolean;
+	/** The exact editor the request started in, when it is still known. */
+	preferredView?: MarkdownView | null;
 }
 
 type PreviewTab = 'diff' | 'result';
@@ -23,13 +26,15 @@ type PreviewTab = 'diff' | 'result';
 /**
  * Review-before-apply.
  *
- * Nothing here writes to a note until a button is pressed, and the replace
- * options disappear entirely when the target text can no longer be located.
+ * The target note is resolved from the anchor captured when the request was
+ * made, never from whichever leaf happens to have focus — by the time this
+ * modal is open, focus is on the modal itself. Nothing is written until a
+ * button is pressed, and options that cannot be performed safely are not shown.
  */
 export class EditPreviewModal extends Modal {
-	private tab: PreviewTab = 'diff';
+	private tab: PreviewTab = 'result';
 	private bodyEl!: HTMLElement;
-	private target: ProposalTarget | null = null;
+	private target: ResolvedEditTarget | null = null;
 
 	constructor(
 		app: App,
@@ -41,14 +46,17 @@ export class EditPreviewModal extends Modal {
 	override onOpen(): void {
 		const { contentEl } = this;
 		contentEl.addClass('obsaide-edit-modal');
-		this.setTitle('Review change');
+		this.setTitle(this.showsDiff() ? 'Review change' : 'Use in note');
 
-		const proposal = this.options.proposal;
-		this.target = proposal ? resolveProposalTarget(this.app, proposal) : null;
-		this.tab = proposal ? 'diff' : 'result';
+		this.target = resolveEditTarget(
+			this.app,
+			this.options.anchor,
+			this.options.preferredView,
+		);
+		this.tab = this.showsDiff() ? 'diff' : 'result';
 
 		this.renderStatus(contentEl);
-		if (proposal) this.renderTabs(contentEl);
+		if (this.showsDiff()) this.renderTabs(contentEl);
 		this.bodyEl = contentEl.createDiv({ cls: 'obsaide-edit-body' });
 		this.renderBody();
 		this.renderActions(contentEl);
@@ -58,44 +66,62 @@ export class EditPreviewModal extends Modal {
 		this.contentEl.empty();
 	}
 
+	/** A diff only makes sense when there is an original to compare against. */
+	private showsDiff(): boolean {
+		return Boolean(this.options.replacesAnchor && this.options.anchor?.selection?.text);
+	}
+
 	private renderStatus(parent: HTMLElement): void {
-		const proposal = this.options.proposal;
-		if (!proposal) {
-			parent.createEl('p', {
-				cls: 'obsaide-modal-description',
-				text: 'Choose where to put this reply. Nothing is written until you do.',
-			});
+		const anchor = this.options.anchor;
+
+		if (!anchor) {
+			this.warn(
+				parent,
+				'This reply is not linked to a note, so it can only be copied. Ask again from a note to insert it.',
+			);
 			return;
 		}
 
 		if (!this.target) {
 			this.warn(
 				parent,
-				`Open “${proposal.path}” to apply this change. You can still copy the result.`,
-			);
-			return;
-		}
-		if (!this.target.range) {
-			this.warn(
-				parent,
-				'The original text is no longer in the note, so it cannot be replaced safely. Insert or copy instead.',
-			);
-			return;
-		}
-		if (this.target.drifted) {
-			this.warn(
-				parent,
-				'The note changed since this was generated. ObsAIde found the original text elsewhere and will replace it there.',
+				`Open “${anchor.path}” in the editor to insert this. You can still copy it.`,
 			);
 			return;
 		}
 
-		const diff = diffLines(proposal.originalText, this.options.proposedText);
-		const summary = summarizeDiff(diff);
 		parent.createEl('p', {
 			cls: 'obsaide-modal-description',
-			text: `${summary.added} lines added, ${summary.removed} removed. Review before applying.`,
+			text: `Target: ${anchor.path}`,
 		});
+
+		if (this.showsDiff() && this.target.selection) {
+			if (this.target.selection.drifted) {
+				this.warn(
+					parent,
+					'The note changed since this was generated. ObsAIde found the original text elsewhere and will replace it there.',
+				);
+			} else {
+				const diff = diffLines(anchor.selection?.text ?? '', this.options.proposedText);
+				const summary = summarizeDiff(diff);
+				parent.createEl('p', {
+					cls: 'obsaide-modal-description',
+					text: `${summary.added} lines added, ${summary.removed} removed.`,
+				});
+			}
+		} else if (this.options.replacesAnchor) {
+			this.warn(
+				parent,
+				'The original text is no longer in the note, so it cannot be replaced safely. Insert or copy instead.',
+			);
+		}
+
+		if (this.target.cursorMoved) {
+			this.warn(
+				parent,
+				'The note is shorter than it was, so the cursor position has been moved to the nearest valid spot.',
+			);
+		}
 	}
 
 	private warn(parent: HTMLElement, text: string): void {
@@ -123,9 +149,9 @@ export class EditPreviewModal extends Modal {
 
 	private renderBody(): void {
 		this.bodyEl.empty();
-		const proposal = this.options.proposal;
+		const original = this.options.anchor?.selection?.text;
 
-		if (this.tab === 'result' || !proposal) {
+		if (this.tab === 'result' || !original) {
 			this.bodyEl.createEl('pre', {
 				cls: 'obsaide-preview-body',
 				text: this.options.proposedText,
@@ -133,7 +159,7 @@ export class EditPreviewModal extends Modal {
 			return;
 		}
 
-		const diff = collapseDiff(diffLines(proposal.originalText, this.options.proposedText));
+		const diff = collapseDiff(diffLines(original, this.options.proposedText));
 		const list = this.bodyEl.createDiv({ cls: 'obsaide-diff' });
 		for (const line of diff) {
 			const row = list.createDiv({ cls: `obsaide-diff-line is-${line.kind}` });
@@ -147,39 +173,35 @@ export class EditPreviewModal extends Modal {
 
 	private renderActions(parent: HTMLElement): void {
 		const footer = parent.createDiv({ cls: 'obsaide-modal-footer is-actions' });
-		const proposal = this.options.proposal;
 		const text = this.options.proposedText;
+		const target = this.target;
+		const selection = target?.selection ?? null;
 
-		if (proposal && this.target?.range) {
-			const range = this.target.range;
-			const editor = this.target.editor;
+		if (target && selection) {
 			this.button(
 				footer,
-				proposal.scope === 'document' ? 'Replace note content' : 'Replace selection',
-				true,
+				this.options.anchor?.wholeDocument ? 'Replace note content' : 'Replace selection',
+				this.showsDiff(),
 				() => {
-					replaceRange(editor, range, text);
-					new Notice('Note updated. Undo with Ctrl/Cmd+Z if needed.');
-					this.close();
+					void this.apply(replaceSelection(this.app, target, selection, text), 'Note updated.');
 				},
 			);
 			this.button(footer, 'Insert below', false, () => {
-				insertAfter(editor, range.to, text);
-				new Notice('Inserted below the original.');
-				this.close();
+				void this.apply(
+					insertBelowSelection(this.app, target, selection, text),
+					'Inserted below the original.',
+				);
 			});
 		}
 
-		this.button(footer, 'Insert at cursor', false, () => {
-			const editor = this.target?.editor ?? getActiveEditor(this.app);
-			if (!editor) {
-				new Notice('Open a note in the editor first.');
-				return;
-			}
-			insertAtCursor(editor, text);
-			new Notice('Inserted at the cursor.');
-			this.close();
-		});
+		if (target) {
+			this.button(footer, 'Insert at cursor', !this.showsDiff(), () => {
+				void this.apply(
+					insertAtAnchor(this.app, target, text),
+					'Inserted at the cursor.',
+				);
+			});
+		}
 
 		this.button(footer, 'Copy', false, () => {
 			void copyToClipboard(text, 'Copied to the clipboard');
@@ -187,6 +209,16 @@ export class EditPreviewModal extends Modal {
 		});
 
 		this.button(footer, 'Cancel', false, () => this.close());
+	}
+
+	private async apply(work: Promise<void>, message: string): Promise<void> {
+		this.close();
+		try {
+			await work;
+			new Notice(`${message} Undo with Ctrl/Cmd+Z if needed.`);
+		} catch {
+			new Notice('Could not write to the note.');
+		}
 	}
 
 	private button(

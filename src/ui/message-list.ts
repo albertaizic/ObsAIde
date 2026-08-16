@@ -2,45 +2,46 @@ import { setIcon, setTooltip, type App, type Component } from 'obsidian';
 import { ASSISTANT_NAME } from '../constants';
 import type { Conversation, ConversationMessage } from '../chat/conversation';
 import type { Attachment } from '../context/types';
+import { attachmentIcon, attachmentLabel } from './attachment-chip';
 import { MarkdownBlock, copyToClipboard } from './markdown';
 
 export interface MessageListCallbacks {
 	onRegenerate: () => void;
 	onOpenSettings: () => void;
-	/** Offered on assistant replies; opens the review-before-apply modal. */
-	onUseInNote?: (message: ConversationMessage) => void;
+	/** Opens the review-before-apply modal. */
+	onUseInNote: (message: ConversationMessage) => void;
+	/** Writes straight to the caret the request was made from. */
+	onInsertAtCursor: (message: ConversationMessage) => void;
+	/** Whether this reply can currently be written to a note. */
+	canInsert: (message: ConversationMessage) => boolean;
+	/** Shows which notes an attached folder contributed. */
+	onInspectAttachment: (attachment: Attachment) => void;
 }
 
 interface RenderedMessage {
 	el: HTMLElement;
 	bodyEl: HTMLElement;
 	block: MarkdownBlock | null;
-	message: ConversationMessage;
 }
 
 /** Renders the transcript and keeps streaming updates cheap. */
 export class MessageList {
 	private rendered = new Map<string, RenderedMessage>();
-	private stickToBottom = true;
 
 	constructor(
 		private readonly app: App,
 		private readonly container: HTMLElement,
 		private readonly parent: Component,
 		private readonly callbacks: MessageListCallbacks,
-	) {
-		// Registered on the view so it is removed with it: scrolling up during a
-		// stream must stop the transcript from yanking itself back down.
-		this.parent.registerDomEvent(this.container, 'scroll', () => {
-			const distance =
-				this.container.scrollHeight -
-				this.container.scrollTop -
-				this.container.clientHeight;
-			this.stickToBottom = distance < 64;
-		});
-	}
+	) {}
 
-	render(conversation: Conversation, generatingId: string | null): void {
+	/**
+	 * Rebuild the transcript.
+	 *
+	 * Resolves once every Markdown block has rendered, so the caller can scroll
+	 * to the bottom against the final layout rather than the empty one.
+	 */
+	async render(conversation: Conversation, generatingId: string | null): Promise<void> {
 		this.teardown();
 		this.container.empty();
 
@@ -48,21 +49,23 @@ export class MessageList {
 			.reverse()
 			.find((message) => message.role === 'assistant')?.id;
 
+		const pending: Promise<void>[] = [];
 		for (const message of conversation.messages) {
-			this.renderMessage(message, {
+			const work = this.renderMessage(message, {
 				isGenerating: message.id === generatingId,
 				isLastAssistant: message.id === lastAssistantId,
 			});
+			if (work) pending.push(work);
 		}
-		this.scrollToBottom(true);
+		await Promise.all(pending);
 	}
 
 	/** Update only the reply currently streaming. */
-	updateStreaming(message: ConversationMessage): void {
+	updateStreaming(message: ConversationMessage): Promise<void> {
 		const entry = this.rendered.get(message.id);
-		if (!entry) return;
+		if (!entry?.block) return Promise.resolve();
 		entry.el.removeClass('is-waiting');
-		void entry.block?.render(message.text).then(() => this.scrollToBottom(false));
+		return entry.block.render(message.text);
 	}
 
 	destroy(): void {
@@ -74,15 +77,10 @@ export class MessageList {
 		this.rendered.clear();
 	}
 
-	private scrollToBottom(force: boolean): void {
-		if (!force && !this.stickToBottom) return;
-		this.container.scrollTop = this.container.scrollHeight;
-	}
-
 	private renderMessage(
 		message: ConversationMessage,
 		state: { isGenerating: boolean; isLastAssistant: boolean },
-	): void {
+	): Promise<void> | null {
 		const isUser = message.role === 'user';
 		const el = this.container.createDiv({
 			cls: `obsaide-message ${isUser ? 'is-user' : 'is-assistant'}`,
@@ -104,9 +102,13 @@ export class MessageList {
 		if (message.attachments?.length) {
 			this.renderAttachments(el, message.attachments);
 		}
+		if (message.contextNote) {
+			el.createDiv({ cls: 'obsaide-message-note', text: message.contextNote });
+		}
 
 		const bodyEl = el.createDiv({ cls: 'obsaide-message-body' });
 		let block: MarkdownBlock | null = null;
+		let work: Promise<void> | null = null;
 
 		if (isUser) {
 			// User text is shown verbatim: it is theirs, not Markdown we produced.
@@ -114,7 +116,7 @@ export class MessageList {
 			bodyEl.setText(message.text);
 		} else if (message.text) {
 			block = new MarkdownBlock(this.app, bodyEl, this.parent, '');
-			void block.render(message.text);
+			work = block.render(message.text);
 		} else if (state.isGenerating) {
 			el.addClass('is-waiting');
 			const waiting = bodyEl.createDiv({ cls: 'obsaide-waiting' });
@@ -134,7 +136,8 @@ export class MessageList {
 			this.renderActions(el, message, state.isLastAssistant);
 		}
 
-		this.rendered.set(message.id, { el, bodyEl, block, message });
+		this.rendered.set(message.id, { el, bodyEl, block });
+		return work;
 	}
 
 	private renderAttachments(parent: HTMLElement, attachments: Attachment[]): void {
@@ -142,13 +145,29 @@ export class MessageList {
 		for (const attachment of attachments) {
 			const chip = row.createDiv({ cls: 'obsaide-chip' });
 			const icon = chip.createSpan({ cls: 'obsaide-chip-icon' });
-			setIcon(icon, attachment.kind === 'selection' ? 'text-cursor-input' : 'file-text');
-			chip.createSpan({ cls: 'obsaide-chip-label', text: attachment.title });
+			setIcon(icon, attachmentIcon(attachment.kind));
+			chip.createSpan({
+				cls: 'obsaide-chip-label',
+				text: attachmentLabel(attachment),
+			});
+			if (attachment.role === 'supporting') {
+				chip.createSpan({ cls: 'obsaide-chip-role', text: 'context' });
+			}
 			setTooltip(chip, attachment.path ?? attachment.title);
+
+			if (attachment.kind === 'folder') {
+				chip.addClass('is-clickable');
+				chip.addEventListener('click', () =>
+					this.callbacks.onInspectAttachment(attachment),
+				);
+			}
 		}
 	}
 
-	private renderError(parent: HTMLElement, error: NonNullable<ConversationMessage['error']>): void {
+	private renderError(
+		parent: HTMLElement,
+		error: NonNullable<ConversationMessage['error']>,
+	): void {
 		const box = parent.createDiv({ cls: 'obsaide-error' });
 		const icon = box.createSpan({ cls: 'obsaide-error-icon' });
 		setIcon(icon, 'alert-triangle');
@@ -183,15 +202,15 @@ export class MessageList {
 	): void {
 		if (!message.text.trim()) return;
 
-		// A reply that was generated to replace note content gets a real button:
-		// applying it is the expected next step, but it still opens a review.
-		if (message.proposal && this.callbacks.onUseInNote) {
+		// A reply generated to replace note content gets a real button: applying
+		// it is the expected next step, but it still opens a review first.
+		if (message.replacesAnchor) {
 			const review = parent.createDiv({ cls: 'obsaide-proposal' });
 			const button = review.createEl('button', {
 				cls: 'obsaide-button is-small',
 				text: 'Review change…',
 			});
-			button.addEventListener('click', () => this.callbacks.onUseInNote?.(message));
+			button.addEventListener('click', () => this.callbacks.onUseInNote(message));
 		}
 
 		const actions = parent.createDiv({ cls: 'obsaide-message-actions' });
@@ -200,9 +219,14 @@ export class MessageList {
 			void copyToClipboard(message.text, 'Reply copied');
 		});
 
-		if (this.callbacks.onUseInNote) {
+		// Insertion is offered only when the originating note is still open, so
+		// a reply can never land in an unrelated file.
+		if (this.callbacks.canInsert(message)) {
+			this.iconButton(actions, 'arrow-down-to-line', 'Insert at cursor', () => {
+				this.callbacks.onInsertAtCursor(message);
+			});
 			this.iconButton(actions, 'file-input', 'Use in note…', () => {
-				this.callbacks.onUseInNote?.(message);
+				this.callbacks.onUseInNote(message);
 			});
 		}
 

@@ -1,4 +1,6 @@
-import type { App } from 'obsidian';
+import type { App, MarkdownView } from 'obsidian';
+import type { NoteEditAnchor } from '../actions/anchor';
+import type { EditTargetRegistry } from '../actions/edit-target';
 import { buildContextBlock } from '../context/resolve';
 import type { Attachment } from '../context/types';
 import { buildSystemPrompt, type AideMode } from '../prompts/system';
@@ -6,17 +8,25 @@ import { AideError, toAideError } from '../providers/errors';
 import type { ProviderService } from '../providers/service';
 import type { ProviderId } from '../providers/types';
 import { collectSecrets, type ObsAideSettings } from '../settings/types';
-import { composeUserContent } from '../context/format';
+import {
+	composeUserContent,
+	describeContextTrimming,
+	summarizeContext,
+} from '../context/format';
 import {
 	createMessage,
 	toProviderMessages,
 	type Conversation,
 	type ConversationMessage,
-	type EditProposalTarget,
 } from './conversation';
 import type { ConversationStore } from './store';
 
-export type ChatChangeReason = 'structure' | 'stream';
+/**
+ * `conversation` means a different transcript is now on screen, which is the
+ * one case where the view should jump back to the latest message even if the
+ * user had scrolled up.
+ */
+export type ChatChangeReason = 'structure' | 'stream' | 'conversation';
 
 export interface SendRequest {
 	/** Shown as the user's message in the transcript. */
@@ -28,14 +38,19 @@ export interface SendRequest {
 	actionLabel?: string;
 	/** Extra system instructions contributed by that action. */
 	actionInstructions?: string;
-	/** Makes the resulting reply applicable back to a note. */
-	proposalTarget?: EditProposalTarget;
+	/** Note, caret and selection this turn came from. */
+	anchor?: NoteEditAnchor;
+	/** The reply is meant to replace the anchored text. */
+	replacesAnchor?: boolean;
+	/** The exact view the anchor was captured from, remembered at runtime. */
+	anchorView?: MarkdownView | null;
 }
 
 export interface ChatControllerDeps {
 	app: App;
 	providers: ProviderService;
 	store: ConversationStore;
+	editTargets: EditTargetRegistry;
 	getSettings: () => ObsAideSettings;
 	saveSettings: () => Promise<void>;
 }
@@ -53,6 +68,8 @@ export class ChatController {
 	private generatingMessageId: string | null = null;
 	/** Remembers the last turn so it can be regenerated. */
 	private lastActionInstructions: string | undefined;
+	/** The editor the current turn was started from, for the target registry. */
+	private lastAnchorView: MarkdownView | null = null;
 
 	constructor(private readonly deps: ChatControllerDeps) {
 		this.conversation = deps.store.mostRecent(
@@ -106,11 +123,11 @@ export class ChatController {
 		// history with identical blank entries.
 		if (this.conversation.messages.length === 0) {
 			this.conversation.mode = mode;
-			this.emit('structure');
+			this.emit('conversation');
 			return;
 		}
 		this.conversation = this.deps.store.create(mode);
-		this.emit('structure');
+		this.emit('conversation');
 	}
 
 	openConversation(id: string): void {
@@ -118,7 +135,7 @@ export class ChatController {
 		if (!conversation) return;
 		this.stop();
 		this.conversation = conversation;
-		this.emit('structure');
+		this.emit('conversation');
 	}
 
 	clearConversation(): void {
@@ -126,18 +143,20 @@ export class ChatController {
 		this.conversation.messages = [];
 		this.conversation.title = '';
 		this.deps.store.touch(this.conversation);
-		this.emit('structure');
+		this.emit('conversation');
 	}
 
 	deleteConversation(id: string): void {
 		this.deps.store.remove(id);
 		if (this.conversation.id === id) this.newConversation();
-		else this.emit('structure');
+		else this.emit('conversation');
 	}
 
 	setMode(mode: AideMode): void {
 		this.conversation.mode = mode;
 		this.deps.store.touch(this.conversation);
+		// Not a conversation switch: toggling tutor mode must not yank someone
+		// who is reading back down to the newest message.
 		this.emit('structure');
 	}
 
@@ -167,28 +186,33 @@ export class ChatController {
 		const settings = this.deps.getSettings();
 		const attachments = request.attachments ?? [];
 		let sentText = request.prompt ?? request.displayText;
+		let contextNote: string | undefined;
 
 		if (attachments.length > 0) {
-			const { block } = await buildContextBlock(this.deps.app, attachments, {
+			const { block, parts } = await buildContextBlock(this.deps.app, attachments, {
 				maxCharsPerNote: settings.maxCharsPerNote,
 				maxContextChars: settings.maxContextChars,
 			});
 			sentText = composeUserContent(block, sentText);
+			contextNote = describeContextTrimming(summarizeContext(parts));
 		}
 
 		const userMessage = createMessage('user', request.displayText, {
 			sentText,
 			attachments: attachments.length > 0 ? attachments : undefined,
+			contextNote,
 			actionLabel: request.actionLabel,
 		});
 		this.conversation.messages.push(userMessage);
 		this.lastActionInstructions = request.actionInstructions;
 		this.emit('structure');
 
+		this.lastAnchorView = request.anchorView ?? null;
 		await this.runTurn({
 			actionLabel: request.actionLabel,
 			actionInstructions: request.actionInstructions,
-			proposal: request.proposalTarget,
+			anchor: request.anchor,
+			replacesAnchor: request.replacesAnchor,
 		});
 	}
 
@@ -204,14 +228,16 @@ export class ChatController {
 		await this.runTurn({
 			actionLabel: previous?.actionLabel,
 			actionInstructions: this.lastActionInstructions,
-			proposal: previous?.proposal,
+			anchor: previous?.anchor,
+			replacesAnchor: previous?.replacesAnchor,
 		});
 	}
 
 	private async runTurn(extra: {
 		actionLabel?: string;
 		actionInstructions?: string;
-		proposal?: EditProposalTarget;
+		anchor?: NoteEditAnchor;
+		replacesAnchor?: boolean;
 	}): Promise<void> {
 		const settings = this.deps.getSettings();
 		const providerId = settings.defaultProvider;
@@ -224,9 +250,13 @@ export class ChatController {
 			providerId,
 			model,
 			actionLabel: extra.actionLabel,
-			proposal: extra.proposal,
+			anchor: extra.anchor,
+			replacesAnchor: extra.replacesAnchor,
 		});
 		this.conversation.messages.push(assistant);
+		// Remember the exact editor this reply belongs to, so insertion still
+		// finds it when the same note is open in more than one pane.
+		this.deps.editTargets.remember(assistant.id, this.lastAnchorView);
 		this.generatingMessageId = assistant.id;
 		const controller = new AbortController();
 		this.abortController = controller;

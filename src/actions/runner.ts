@@ -1,47 +1,37 @@
-import { Notice, type Editor, type TFile } from 'obsidian';
-import type { EditProposalTarget } from '../chat/conversation';
+import { Notice, type TFile } from 'obsidian';
 import { captureNote, captureSelection, getEditorTarget } from '../context/collect';
 import type { Attachment } from '../context/types';
 import type ObsAidePlugin from '../main';
 import { PromptModal } from '../ui/prompt-modal';
 import { createId } from '../utils/id';
 import { summarize } from '../utils/text';
+import type { NoteEditAnchor } from './anchor';
+import { captureAnchor, captureWholeNoteAnchor } from './edit-target';
 import type { AideAction } from './registry';
+import type { EditorTarget } from '../context/collect';
 
 interface ActionScope {
-	attachment: Attachment;
-	proposal?: EditProposalTarget;
+	attachments: Attachment[];
+	anchor: NoteEditAnchor | null;
 }
 
 /**
  * Decide what the action operates on.
  *
- * A selection wins. Otherwise the whole note is used, and for actions that
- * rewrite content the exact text is snapshotted so the later diff is against
- * what the model actually saw.
+ * A selection wins, and the note it sits in travels with it as supporting
+ * context so the model can resolve references the selection alone does not
+ * explain. With no selection the whole note is the subject, and for rewriting
+ * actions its exact text is snapshotted so the later diff matches what the
+ * model saw.
  */
-function captureScope(
-	editor: Editor,
-	file: TFile | null,
-	action: AideAction,
-): ActionScope | null {
-	const selection = captureSelection(editor, file);
+function captureScope(target: EditorTarget, action: AideAction): ActionScope | null {
+	const { editor, file, view } = target;
+	const selection = captureSelection(editor, file, 'primary');
+
 	if (selection) {
-		const from = editor.getCursor('from');
-		const to = editor.getCursor('to');
-		return {
-			attachment: selection,
-			proposal:
-				action.mutates && file
-					? {
-							path: file.path,
-							originalText: selection.text ?? '',
-							from,
-							to,
-							scope: 'selection',
-						}
-					: undefined,
-		};
+		const attachments: Attachment[] = [selection];
+		if (file && !action.mutates) attachments.push(captureNote(file, 'supporting'));
+		return { attachments, anchor: captureAnchor(view) };
 	}
 
 	if (!file) return null;
@@ -49,25 +39,27 @@ function captureScope(
 	if (!content.trim()) return null;
 
 	if (!action.mutates) {
-		return { attachment: captureNote(file) };
+		return { attachments: [captureNote(file, 'primary')], anchor: captureAnchor(view) };
 	}
 
-	const title = `Whole note: ${summarize(file.basename, 24)}`;
 	return {
-		attachment: {
-			id: createId('a-'),
-			kind: 'selection',
-			path: file.path,
-			title,
-			text: content,
-		},
-		proposal: {
-			path: file.path,
-			originalText: content,
-			from: { line: 0, ch: 0 },
-			to: editor.offsetToPos(content.length),
-			scope: 'document',
-		},
+		attachments: [wholeNoteSnapshot(file, content)],
+		anchor: captureWholeNoteAnchor(view),
+	};
+}
+
+/**
+ * A rewriting action on a whole note sends a snapshot rather than a re-read, so
+ * the text the model transforms is exactly the text the diff compares against.
+ */
+function wholeNoteSnapshot(file: TFile, content: string): Attachment {
+	return {
+		id: createId('a-'),
+		kind: 'selection',
+		path: file.path,
+		title: `Whole note: ${summarize(file.basename, 24)}`,
+		text: content,
+		role: 'primary',
 	};
 }
 
@@ -101,7 +93,9 @@ export async function runAction(
 		return;
 	}
 
-	const scope = captureScope(target.editor, target.file, action);
+	// Everything about the editor is captured before the sidebar is opened,
+	// because opening it moves focus away from the note.
+	const scope = captureScope(target, action);
 	if (!scope) {
 		new Notice('Select some text, or open a note with content.');
 		return;
@@ -121,7 +115,9 @@ export async function runAction(
 		prompt: prompt.user,
 		actionLabel: action.label,
 		actionInstructions: prompt.system,
-		attachments: [scope.attachment],
-		proposalTarget: scope.proposal,
+		attachments: scope.attachments,
+		anchor: scope.anchor ?? undefined,
+		replacesAnchor: action.mutates,
+		anchorView: target.view,
 	});
 }

@@ -1,23 +1,9 @@
+import type { NoteEditAnchor } from '../actions/anchor';
 import type { Attachment } from '../context/types';
 import type { AideMode } from '../prompts/system';
 import type { ChatMessage, ProviderId } from '../providers/types';
 import { createId } from '../utils/id';
 import { summarize } from '../utils/text';
-
-/**
- * Where an assistant reply proposes replacing note content.
- *
- * The original text is kept so the edit can be verified before it is applied:
- * if the note moved on in the meantime, ObsAIde refuses to overwrite it.
- */
-export interface EditProposalTarget {
-	path: string;
-	originalText: string;
-	from: { line: number; ch: number };
-	to: { line: number; ch: number };
-	/** Whether the range was a selection or the whole document. */
-	scope: 'selection' | 'document';
-}
 
 export interface MessageError {
 	kind: string;
@@ -36,6 +22,8 @@ export interface ConversationMessage {
 	 */
 	sentText?: string;
 	attachments?: Attachment[];
+	/** Says so when context had to be trimmed to fit the budget. */
+	contextNote?: string;
 	createdAt: number;
 	/** Present on assistant turns that failed. */
 	error?: MessageError;
@@ -45,8 +33,15 @@ export interface ConversationMessage {
 	model?: string;
 	/** Name of the note action that produced this exchange. */
 	actionLabel?: string;
-	/** Set when this reply can be applied back to a note. */
-	proposal?: EditProposalTarget;
+	/**
+	 * Where this reply came from, and where it can be written back to.
+	 *
+	 * Captured when the request was made rather than resolved at apply time,
+	 * because by then the sidebar and a modal have both taken focus.
+	 */
+	anchor?: NoteEditAnchor;
+	/** The reply was generated to replace the anchored text. */
+	replacesAnchor?: boolean;
 }
 
 export interface Conversation {

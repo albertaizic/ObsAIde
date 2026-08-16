@@ -1,35 +1,28 @@
 import { Notice, type Editor, type MarkdownFileInfo, type MarkdownView } from 'obsidian';
+import { captureAnchor } from './actions/edit-target';
 import { AIDE_ACTIONS } from './actions/registry';
 import { canRunActions, runAction } from './actions/runner';
 import { ASSISTANT_NAME } from './constants';
-import { captureNote, captureSelection, getEditorTarget } from './context/collect';
+import {
+	captureAskContext,
+	captureNote,
+	captureSelection,
+	getEditorTarget,
+} from './context/collect';
 import type { Attachment } from './context/types';
 import type ObsAidePlugin from './main';
 import { ActionPickerModal } from './ui/action-picker';
 import { AskAideModal } from './ui/ask-modal';
 
-/**
- * Gather the context Ask Aide should start from.
- *
- * A selection wins over the whole note, because it is the more specific thing
- * the user pointed at. When there is no editor at all the modal simply opens
- * with no context.
- */
-function captureAskContext(plugin: ObsAidePlugin): Attachment[] {
-	const target = getEditorTarget(plugin.app);
-	if (target) {
-		const selection = captureSelection(target.editor, target.file);
-		if (selection) return [selection];
-		if (target.file) return [captureNote(target.file)];
-	}
-	const activeFile = plugin.app.workspace.getActiveFile();
-	return activeFile ? [captureNote(activeFile)] : [];
-}
-
 /** Open Ask Aide with whatever the user is currently looking at. */
 export function openAskAide(plugin: ObsAidePlugin, attachments?: Attachment[]): void {
+	// Capture the editor before the modal opens: from that point on, focus is on
+	// the modal and then on the sidebar, never on the note.
+	const target = getEditorTarget(plugin.app);
+	const anchor = target ? captureAnchor(target.view) : null;
+
 	new AskAideModal(plugin.app, {
-		attachments: attachments ?? captureAskContext(plugin),
+		attachments: attachments ?? captureAskContext(plugin.app),
 		onSubmit: (question, chosen) => {
 			void (async () => {
 				const view = await plugin.activateChatView();
@@ -37,7 +30,12 @@ export function openAskAide(plugin: ObsAidePlugin, attachments?: Attachment[]): 
 					new Notice(`Could not open ${ASSISTANT_NAME}.`);
 					return;
 				}
-				await view.send({ displayText: question, attachments: chosen });
+				await view.send({
+					displayText: question,
+					attachments: chosen,
+					anchor: anchor ?? undefined,
+					anchorView: target?.view ?? null,
+				});
 			})();
 		},
 	}).open();
@@ -76,8 +74,16 @@ export function registerEditorMenu(plugin: ObsAidePlugin): void {
 			'editor-menu',
 			(menu, editor: Editor, info: MarkdownView | MarkdownFileInfo) => {
 				const file = info.file ?? null;
-				const selection = captureSelection(editor, file);
-				const attachments = selection ? [selection] : file ? [captureNote(file)] : [];
+				const selection = captureSelection(editor, file, 'primary');
+				// The containing note rides along as supporting context so a
+				// selection like "its complexity is O(log n)" still has a subject.
+				const attachments = selection
+					? file
+						? [selection, captureNote(file, 'supporting')]
+						: [selection]
+					: file
+						? [captureNote(file, 'primary')]
+						: [];
 
 				menu.addItem((item) =>
 					item

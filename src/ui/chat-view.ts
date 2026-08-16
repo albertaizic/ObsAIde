@@ -4,12 +4,21 @@ import {
 	Notice,
 	setIcon,
 	setTooltip,
+	type MarkdownView,
 	type WorkspaceLeaf,
 } from 'obsidian';
 import { AIDE_ICON, ASSISTANT_NAME, CHAT_VIEW_TYPE } from '../constants';
-import type { ChatController, SendRequest } from '../chat/controller';
-import { isEmptyConversation } from '../chat/conversation';
+import type { NoteEditAnchor } from '../actions/anchor';
 import {
+	captureAnchor,
+	insertAtAnchor,
+	resolveEditTarget,
+	type ResolvedEditTarget,
+} from '../actions/edit-target';
+import type { ChatController, SendRequest } from '../chat/controller';
+import { isEmptyConversation, type ConversationMessage } from '../chat/conversation';
+import {
+	captureFolder,
 	captureNote,
 	captureSelection,
 	getEditorTarget,
@@ -19,12 +28,15 @@ import type { Attachment } from '../context/types';
 import { getProviderDescriptor } from '../providers/catalog';
 import { isProviderConfigured } from '../settings/types';
 import { summarize } from '../utils/text';
+import { AttachmentDetailsModal } from './attachment-details';
 import { Composer } from './composer';
 import { ConversationPickerModal } from './conversation-picker';
 import { EditPreviewModal } from './edit-preview';
+import { FolderPickerModal } from './folder-picker';
 import { MessageList } from './message-list';
 import { ModelPickerModal } from './model-picker';
 import { NotePickerModal } from './note-picker';
+import { BottomScroller } from './scroller';
 import type ObsAidePlugin from '../main';
 
 const STREAM_RENDER_INTERVAL_MS = 90;
@@ -34,10 +46,13 @@ export class AideChatView extends ItemView {
 	private controller: ChatController;
 	private messageList!: MessageList;
 	private composer!: Composer;
+	private scroller!: BottomScroller;
 	private providerButton!: HTMLButtonElement;
 	private modelButton!: HTMLButtonElement;
 	private modeBadge!: HTMLElement;
-	private messagesEl!: HTMLElement;
+	private scrollerEl!: HTMLElement;
+	private flowEl!: HTMLElement;
+	private jumpButton!: HTMLButtonElement;
 
 	private attachments: Attachment[] = [];
 	private unsubscribe: (() => void) | null = null;
@@ -71,17 +86,8 @@ export class AideChatView extends ItemView {
 		root.addClass('obsaide-view');
 
 		this.buildHeader(root);
-		this.messagesEl = root.createDiv({ cls: 'obsaide-messages' });
-		this.messageList = new MessageList(this.app, this.messagesEl, this, {
-			onRegenerate: () => void this.controller.regenerate(),
-			onOpenSettings: () => this.plugin.openSettings(),
-			onUseInNote: (message) => {
-				new EditPreviewModal(this.app, {
-					proposedText: message.text,
-					proposal: message.proposal,
-				}).open();
-			},
-		});
+		this.buildTranscript(root);
+
 		this.composer = new Composer(root, {
 			onSend: (text) => void this.send({ displayText: text }),
 			onStop: () => this.controller.stop(),
@@ -90,14 +96,21 @@ export class AideChatView extends ItemView {
 				this.attachments = this.attachments.filter((item) => item.id !== id);
 				this.composer.setAttachments(this.attachments);
 			},
+			onInspectAttachment: (attachment) => this.inspect(attachment),
 		});
 
 		this.unsubscribe = this.controller.onChange((reason) => {
-			if (reason === 'stream') this.scheduleStreamRender();
-			else this.renderAll();
+			if (reason === 'stream') {
+				this.scheduleStreamRender();
+				return;
+			}
+			// A different transcript is now on screen, so start at the latest
+			// message however the previous one was scrolled.
+			if (reason === 'conversation') this.scroller.pin();
+			void this.renderAll();
 		});
 
-		this.renderAll();
+		await this.renderAll();
 	}
 
 	override async onClose(): Promise<void> {
@@ -120,7 +133,18 @@ export class AideChatView extends ItemView {
 		const attachments = request.attachments ?? this.attachments;
 		this.attachments = [];
 		this.composer.setAttachments(this.attachments);
-		await this.controller.send({ ...request, attachments });
+
+		// A plain chat message still records where the user was working, so its
+		// reply can be inserted back into that note later.
+		const fallback = this.captureAmbientAnchor();
+		this.scroller.pin();
+
+		await this.controller.send({
+			...request,
+			attachments,
+			anchor: request.anchor ?? fallback?.anchor,
+			anchorView: request.anchorView ?? fallback?.view ?? null,
+		});
 	}
 
 	addAttachment(attachment: Attachment): void {
@@ -133,7 +157,45 @@ export class AideChatView extends ItemView {
 		this.composer?.focus();
 	}
 
-	// --- header --------------------------------------------------------------
+	/** Where the user was working, for replies that were not started from a note. */
+	private captureAmbientAnchor(): { anchor: NoteEditAnchor; view: MarkdownView } | null {
+		const target = getEditorTarget(this.app);
+		if (!target) return null;
+		const anchor = captureAnchor(target.view);
+		return anchor ? { anchor, view: target.view } : null;
+	}
+
+	// --- layout --------------------------------------------------------------
+
+	private buildTranscript(root: HTMLElement): void {
+		const body = root.createDiv({ cls: 'obsaide-body' });
+		this.scrollerEl = body.createDiv({ cls: 'obsaide-messages' });
+		this.flowEl = this.scrollerEl.createDiv({ cls: 'obsaide-message-flow' });
+
+		this.jumpButton = body.createEl('button', {
+			cls: 'obsaide-jump',
+			attr: { 'aria-label': 'Jump to latest' },
+		});
+		setIcon(this.jumpButton, 'arrow-down');
+		setTooltip(this.jumpButton, 'Jump to latest');
+		this.jumpButton.addEventListener('click', () => this.scroller.pin());
+
+		this.scroller = new BottomScroller(this.scrollerEl, this.flowEl, this, (pinned) => {
+			this.jumpButton.toggleClass('is-visible', !pinned);
+		});
+
+		this.messageList = new MessageList(this.app, this.flowEl, this, {
+			onRegenerate: () => {
+				this.scroller.pin();
+				void this.controller.regenerate();
+			},
+			onOpenSettings: () => this.plugin.openSettings(),
+			onUseInNote: (message) => this.openReview(message),
+			onInsertAtCursor: (message) => void this.insertAtCursor(message),
+			canInsert: (message) => this.resolveTarget(message) !== null,
+			onInspectAttachment: (attachment) => this.inspect(attachment),
+		});
+	}
 
 	private buildHeader(root: HTMLElement): void {
 		const header = root.createDiv({ cls: 'obsaide-header' });
@@ -164,6 +226,49 @@ export class AideChatView extends ItemView {
 		more.addEventListener('click', (event) => this.showOverflowMenu(event));
 	}
 
+	// --- note insertion ------------------------------------------------------
+
+	private resolveTarget(message: ConversationMessage): ResolvedEditTarget | null {
+		return resolveEditTarget(
+			this.app,
+			message.anchor,
+			this.plugin.editTargets.recall(message.id),
+		);
+	}
+
+	private openReview(message: ConversationMessage): void {
+		new EditPreviewModal(this.app, {
+			proposedText: message.text,
+			anchor: message.anchor,
+			replacesAnchor: message.replacesAnchor,
+			preferredView: this.plugin.editTargets.recall(message.id),
+		}).open();
+	}
+
+	private async insertAtCursor(message: ConversationMessage): Promise<void> {
+		const target = this.resolveTarget(message);
+		if (!target) {
+			new Notice(
+				message.anchor
+					? `Open “${message.anchor.path}” to insert this reply.`
+					: 'This reply is not linked to a note. Copy it instead.',
+			);
+			return;
+		}
+		try {
+			await insertAtAnchor(this.app, target, message.text);
+			new Notice('Inserted at the cursor. Undo with Ctrl/Cmd+Z if needed.');
+		} catch {
+			new Notice('Could not write to the note.');
+		}
+	}
+
+	private inspect(attachment: Attachment): void {
+		new AttachmentDetailsModal(this.app, attachment).open();
+	}
+
+	// --- menus ---------------------------------------------------------------
+
 	private showProviderMenu(): void {
 		const settings = this.plugin.settings;
 		const menu = new Menu();
@@ -192,6 +297,7 @@ export class AideChatView extends ItemView {
 				.setIcon('settings')
 				.onClick(() => this.plugin.openSettings()),
 		);
+
 		const rect = this.providerButton.getBoundingClientRect();
 		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
 	}
@@ -272,9 +378,9 @@ export class AideChatView extends ItemView {
 	private showContextMenu(anchor: HTMLElement): void {
 		const menu = new Menu();
 		const target = getEditorTarget(this.app);
-		const activeFile = this.app.workspace.getActiveFile();
+		const activeFile = this.app.workspace.getActiveFile() ?? target?.file ?? null;
 
-		const selection = target ? captureSelection(target.editor, target.file) : null;
+		const selection = target ? captureSelection(target.editor, target.file, 'primary') : null;
 		menu.addItem((item) =>
 			item
 				.setTitle('Current selection')
@@ -287,7 +393,9 @@ export class AideChatView extends ItemView {
 		menu.addItem((item) =>
 			item
 				.setTitle(
-					activeFile ? `Current note: ${summarize(activeFile.basename, 24)}` : 'Current note',
+					activeFile
+						? `Current note: ${summarize(activeFile.basename, 24)}`
+						: 'Current note',
 				)
 				.setIcon('file-text')
 				.setDisabled(!activeFile)
@@ -302,6 +410,16 @@ export class AideChatView extends ItemView {
 				.onClick(() => {
 					new NotePickerModal(this.app, (file) =>
 						this.addAttachment(captureNote(file)),
+					).open();
+				}),
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Choose a folder…')
+				.setIcon('folder')
+				.onClick(() => {
+					new FolderPickerModal(this.app, (folder) =>
+						this.addAttachment(captureFolder(this.app, folder)),
 					).open();
 				}),
 		);
@@ -334,25 +452,35 @@ export class AideChatView extends ItemView {
 			if (!this.streamPending) return;
 			this.streamPending = false;
 			const message = this.controller.generatingMessage;
-			if (message) this.messageList.updateStreaming(message);
+			if (!message) return;
+			void this.messageList.updateStreaming(message).then(() => this.scroller.settle());
 		}, STREAM_RENDER_INTERVAL_MS);
 		this.registerInterval(this.streamTimer);
 	}
 
-	private renderAll(): void {
+	private async renderAll(): Promise<void> {
 		const conversation = this.controller.current;
 		const generatingId = this.controller.generatingMessage?.id ?? null;
+
+		// A rebuild empties the scroller, so the reading position is captured
+		// first: following the conversation returns to the bottom, and reading
+		// older messages stays put instead of snapping to the top.
+		const restoreScroll = this.scroller.preserve();
 
 		this.updateHeader();
 		if (isEmptyConversation(conversation)) {
 			this.messageList.destroy();
-			this.messagesEl.empty();
-			this.renderEmptyState(this.messagesEl);
+			this.flowEl.empty();
+			this.renderEmptyState(this.flowEl);
 		} else {
-			this.messageList.render(conversation, generatingId);
+			// Await the Markdown render so scrolling happens against the finished
+			// layout, not an empty transcript.
+			await this.messageList.render(conversation, generatingId);
 		}
 		this.composer.setGenerating(this.controller.isGenerating);
 		this.composer.setAttachments(this.attachments);
+
+		restoreScroll();
 	}
 
 	private updateHeader(): void {
@@ -368,10 +496,7 @@ export class AideChatView extends ItemView {
 		this.modelButton.setText(summarize(model, 28));
 		setTooltip(this.modelButton, `Model: ${model}. Select to change.`);
 
-		this.modeBadge.toggleClass(
-			'is-visible',
-			this.controller.current.mode === 'tutor',
-		);
+		this.modeBadge.toggleClass('is-visible', this.controller.current.mode === 'tutor');
 	}
 
 	private renderEmptyState(parent: HTMLElement): void {
@@ -403,13 +528,13 @@ export class AideChatView extends ItemView {
 
 		empty.createEl('p', {
 			cls: 'obsaide-empty-text',
-			text: 'Attach a note or a selection, then ask anything. Nothing from your vault is sent unless you attach it.',
+			text: 'Attach a note or a folder, then ask anything. Nothing from your vault is sent unless you attach it.',
 		});
 
 		const suggestions = empty.createDiv({ cls: 'obsaide-suggestions' });
 		for (const prompt of [
 			'Explain the note I attached',
-			'Summarise this in five bullets',
+			'What should I add next to this note?',
 			'Teach me this topic step by step',
 		]) {
 			const chip = suggestions.createEl('button', {

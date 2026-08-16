@@ -171,15 +171,68 @@
 
 /* -------------------------------------------------------------- transcript */
 
+.obsaide-body {
+	position: relative;
+	flex: 1 1 auto;
+	display: flex;
+	min-height: 0;
+	min-width: 0;
+}
+
 .obsaide-messages {
 	flex: 1 1 auto;
 	overflow-y: auto;
 	overflow-x: hidden;
-	padding: var(--size-4-3);
+	min-width: 0;
+}
+
+/* The flow is the box the scroller watches for height changes. */
+.obsaide-message-flow {
 	display: flex;
 	flex-direction: column;
 	gap: var(--size-4-4);
+	padding: var(--size-4-3);
 	min-width: 0;
+	min-height: 100%;
+	/* Allows a drag selection to run across several messages. */
+	-webkit-user-select: text;
+	user-select: text;
+}
+
+.obsaide-jump {
+	all: unset;
+	position: absolute;
+	right: var(--size-4-3);
+	bottom: var(--size-4-2);
+	display: none;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	cursor: pointer;
+	color: var(--text-muted);
+	background-color: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: var(--shadow-s);
+}
+
+.obsaide-jump.is-visible {
+	display: inline-flex;
+}
+
+.obsaide-jump:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-hover);
+}
+
+.obsaide-jump:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.obsaide-jump .svg-icon {
+	width: 15px;
+	height: 15px;
 }
 
 .obsaide-message {
@@ -187,6 +240,35 @@
 	flex-direction: column;
 	gap: var(--size-4-1);
 	min-width: 0;
+}
+
+/*
+ * Obsidian disables text selection across most of its chrome, and a sidebar
+ * view inherits that. Message content is prose, so selection is turned back on
+ * here — and only here, so buttons and chips keep behaving like controls.
+ */
+.obsaide-message-body,
+.obsaide-message-body *,
+.obsaide-user-text,
+.obsaide-preview-body,
+.obsaide-diff-text {
+	-webkit-user-select: text;
+	user-select: text;
+	cursor: auto;
+}
+
+.obsaide-message-body pre,
+.obsaide-message-body code {
+	cursor: text;
+}
+
+.obsaide-message-actions button,
+.obsaide-proposal button,
+.obsaide-chip-remove,
+.obsaide-copy-code {
+	-webkit-user-select: none;
+	user-select: none;
+	cursor: pointer;
 }
 
 .obsaide-message-head {
@@ -563,6 +645,41 @@
 .obsaide-chip-remove .svg-icon {
 	width: 12px;
 	height: 12px;
+}
+
+.obsaide-chip-role {
+	flex: 0 0 auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	border-left: 1px solid var(--background-modifier-border);
+	padding-left: 4px;
+}
+
+.obsaide-chip .is-clickable,
+.obsaide-chip.is-clickable {
+	cursor: pointer;
+	text-decoration-line: underline;
+	text-decoration-style: dotted;
+	text-underline-offset: 2px;
+}
+
+.obsaide-note-list {
+	margin: 0;
+	padding-left: var(--size-4-4);
+	max-height: 40vh;
+	overflow: auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	-webkit-user-select: text;
+	user-select: text;
+}
+
+.obsaide-slider-value {
+	font-variant-numeric: tabular-nums;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	min-width: 3ch;
+	text-align: right;
 }
 
 .obsaide-input-row {

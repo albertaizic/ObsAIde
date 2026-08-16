@@ -1,5 +1,6 @@
 import { Notice, Plugin, type WorkspaceLeaf } from 'obsidian';
 import { AIDE_ICON, ASSISTANT_NAME, CHAT_VIEW_TYPE } from './constants';
+import { EditTargetRegistry } from './actions/edit-target';
 import { ChatController } from './chat/controller';
 import { registerCommands, registerEditorMenu } from './commands';
 import { createConversationStorage } from './chat/obsidian-storage';
@@ -7,7 +8,12 @@ import { ConversationStore } from './chat/store';
 import { ObsidianHttpClient } from './providers/obsidian-http';
 import { ProviderService } from './providers/service';
 import { ObsAideSettingTab } from './settings/settings-tab';
-import { createDefaultSettings, normalizeSettings, type ObsAideSettings } from './settings/types';
+import {
+	createDefaultSettings,
+	needsMigration,
+	normalizeSettings,
+	type ObsAideSettings,
+} from './settings/types';
 import { AideChatView } from './ui/chat-view';
 
 /**
@@ -22,9 +28,16 @@ export default class ObsAidePlugin extends Plugin {
 	providers!: ProviderService;
 	conversations!: ConversationStore;
 	chat!: ChatController;
+	/** Runtime-only map from reply to the editor it was generated from. */
+	readonly editTargets = new EditTargetRegistry();
 
 	async onload(): Promise<void> {
-		this.settings = normalizeSettings(await this.loadData());
+		const stored: unknown = await this.loadData();
+		this.settings = normalizeSettings(stored);
+		// Values that were valid under an older schema — a temperature of 2, say
+		// — are clamped on load, so persist the corrected settings immediately
+		// rather than leaving the old value to be sent invisibly.
+		if (needsMigration(stored, this.settings)) await this.saveData(this.settings);
 		this.providers = new ProviderService(() => this.settings, new ObsidianHttpClient());
 
 		this.conversations = new ConversationStore(createConversationStorage(this), {
@@ -36,6 +49,7 @@ export default class ObsAidePlugin extends Plugin {
 			app: this.app,
 			providers: this.providers,
 			store: this.conversations,
+			editTargets: this.editTargets,
 			getSettings: () => this.settings,
 			saveSettings: () => this.saveSettings(),
 		});
@@ -54,6 +68,7 @@ export default class ObsAidePlugin extends Plugin {
 
 	override onunload(): void {
 		this.chat?.stop();
+		this.editTargets.clear();
 		this.conversations?.dispose();
 		// Obsidian does not await `onunload`; the final write is fired here and
 		// is safe to lose only if the app is killed mid-write.
