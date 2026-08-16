@@ -796,3 +796,105 @@
 	flex: 1 1 auto;
 	min-width: 0;
 }
+
+/* ---------------------------------------------------------------- settings */
+
+.obsaide-settings-note {
+	margin-top: 0;
+	margin-bottom: var(--size-4-3);
+}
+
+.obsaide-settings-textarea {
+	width: 100%;
+	min-height: 5em;
+	resize: vertical;
+}
+
+.obsaide-key-input {
+	font-family: var(--font-monospace);
+}
+
+.obsaide-provider {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	margin-bottom: var(--size-4-2);
+	background-color: var(--background-secondary);
+}
+
+.obsaide-provider-summary {
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-3);
+	list-style: none;
+}
+
+.obsaide-provider-summary::-webkit-details-marker {
+	display: none;
+}
+
+.obsaide-provider-name {
+	font-weight: var(--font-medium);
+}
+
+.obsaide-provider-status {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 0 var(--size-4-1);
+}
+
+.obsaide-provider-status.is-ready {
+	color: var(--text-success);
+	border-color: var(--text-success);
+}
+
+.obsaide-provider-body {
+	padding: 0 var(--size-4-3) var(--size-4-2);
+	background-color: var(--background-primary);
+	border-bottom-left-radius: var(--radius-m);
+	border-bottom-right-radius: var(--radius-m);
+}
+
+.obsaide-provider-body .setting-item:first-of-type {
+	border-top: none;
+}
+
+.obsaide-test-result {
+	display: none;
+	align-items: center;
+	gap: var(--size-4-1);
+	font-size: var(--font-ui-smaller);
+	padding-bottom: var(--size-4-2);
+	overflow-wrap: anywhere;
+}
+
+.obsaide-test-result.is-ok,
+.obsaide-test-result.is-error,
+.obsaide-test-result.is-pending {
+	display: flex;
+}
+
+.obsaide-test-result.is-ok {
+	color: var(--text-success);
+}
+
+.obsaide-test-result.is-error {
+	color: var(--text-error);
+}
+
+.obsaide-test-result.is-pending {
+	color: var(--text-muted);
+}
+
+.obsaide-test-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+
+.obsaide-test-icon .svg-icon {
+	width: 14px;
+	height: 14px;
+}

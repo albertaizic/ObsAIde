@@ -44,6 +44,14 @@ export default defineConfig(
 		},
 	},
 	{
+		// The declarative settings API arrived in Obsidian 1.13; this plugin
+		// targets 1.7.2, so the settings tab is built imperatively on purpose.
+		files: ['src/settings/settings-tab.ts'],
+		rules: {
+			'obsidianmd/settings-tab/prefer-setting-definitions': 'off',
+		},
+	},
+	{
 		// The conversation store is deliberately free of Obsidian and DOM APIs
 		// so it can be unit tested; its debounce timer is not window-bound.
 		files: ['src/chat/store.ts'],

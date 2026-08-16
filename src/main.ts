@@ -6,6 +6,7 @@ import { createConversationStorage } from './chat/obsidian-storage';
 import { ConversationStore } from './chat/store';
 import { ObsidianHttpClient } from './providers/obsidian-http';
 import { ProviderService } from './providers/service';
+import { ObsAideSettingTab } from './settings/settings-tab';
 import { createDefaultSettings, normalizeSettings, type ObsAideSettings } from './settings/types';
 import { AideChatView } from './ui/chat-view';
 
@@ -47,6 +48,8 @@ export default class ObsAidePlugin extends Plugin {
 
 		registerCommands(this);
 		registerEditorMenu(this);
+
+		this.addSettingTab(new ObsAideSettingTab(this.app, this));
 	}
 
 	override onunload(): void {
