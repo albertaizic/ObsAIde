@@ -1,6 +1,7 @@
 import { Notice, Plugin, type WorkspaceLeaf } from 'obsidian';
 import { AIDE_ICON, ASSISTANT_NAME, CHAT_VIEW_TYPE } from './constants';
 import { ChatController } from './chat/controller';
+import { registerCommands, registerEditorMenu } from './commands';
 import { createConversationStorage } from './chat/obsidian-storage';
 import { ConversationStore } from './chat/store';
 import { ObsidianHttpClient } from './providers/obsidian-http';
@@ -44,11 +45,8 @@ export default class ObsAidePlugin extends Plugin {
 			void this.activateChatView();
 		});
 
-		this.addCommand({
-			id: 'open-aide',
-			name: `Open ${ASSISTANT_NAME}`,
-			callback: () => void this.activateChatView(),
-		});
+		registerCommands(this);
+		registerEditorMenu(this);
 	}
 
 	override onunload(): void {

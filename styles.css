@@ -661,3 +661,48 @@
 .obsaide-prompt-field input[type='text'] {
 	width: 100%;
 }
+
+/* --------------------------------------------------------------- ask modal */
+
+.obsaide-ask-modal .obsaide-context-row {
+	margin-bottom: var(--size-4-2);
+}
+
+.obsaide-ask-input {
+	width: 100%;
+	resize: vertical;
+	font-size: var(--font-ui-small);
+	line-height: var(--line-height-normal);
+}
+
+.obsaide-ask-preview {
+	margin-bottom: var(--size-4-2);
+}
+
+.obsaide-preview summary {
+	cursor: pointer;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.obsaide-preview-body {
+	max-height: 180px;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: var(--font-ui-smaller);
+	background-color: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: var(--size-4-2);
+	margin-top: var(--size-4-1);
+}
+
+.obsaide-modal-footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-3);
+	flex-wrap: wrap;
+}
