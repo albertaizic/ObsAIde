@@ -34,11 +34,18 @@ export interface ObsAideSettings {
 	maxContextChars: number;
 }
 
-export const TEMPERATURE_RANGE = { min: 0, max: 2, step: 0.05 } as const;
-export const MAX_OUTPUT_TOKENS_RANGE = { min: 256, max: 32_000 } as const;
+/**
+ * Temperature is capped at 1.0 on purpose.
+ *
+ * Above that, most chat models degrade into incoherent output, and a global
+ * slider is the wrong place to let someone do that by accident. Providers that
+ * accept a wider range are clamped in `providers/capabilities.ts`.
+ */
+export const TEMPERATURE_RANGE = { min: 0, max: 1, step: 0.05 } as const;
+export const MAX_OUTPUT_TOKENS_RANGE = { min: 256, max: 16_000 } as const;
 export const CONTEXT_CHAR_RANGE = { min: 1_000, max: 200_000 } as const;
 
-const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 function defaultProviderSettings(id: ProviderId): ProviderSettings {
 	const descriptor = getProviderDescriptor(id);
@@ -61,7 +68,8 @@ export function createDefaultSettings(): ObsAideSettings {
 		providers,
 		customProviderLabel: 'Custom',
 		customInstructions: '',
-		temperature: 0.7,
+		// Aimed at concise, factual help rather than creative writing.
+		temperature: 0.3,
 		maxOutputTokens: 4096,
 		streaming: true,
 		tutorModeByDefault: false,
@@ -197,6 +205,24 @@ export function findConfigurationIssue(
 
 export function isProviderConfigured(settings: ObsAideSettings, id: ProviderId): boolean {
 	return findConfigurationIssue(settings, id) === null;
+}
+
+/**
+ * Whether the settings on disk differ from what ObsAIde will now use.
+ *
+ * The caller writes the normalised settings back when this is true, so a value
+ * that was legal under an older schema — a temperature of 2.0 from before the
+ * cap — cannot keep being sent to providers after the UI has stopped offering
+ * it.
+ */
+export function needsMigration(raw: unknown, normalized: ObsAideSettings): boolean {
+	if (typeof raw !== 'object' || raw === null) return false;
+	const data = raw as Record<string, unknown>;
+	if (data['schemaVersion'] !== SCHEMA_VERSION) return true;
+	return (
+		data['temperature'] !== normalized.temperature ||
+		data['maxOutputTokens'] !== normalized.maxOutputTokens
+	);
 }
 
 /** Every API key currently stored, used to scrub diagnostics. */

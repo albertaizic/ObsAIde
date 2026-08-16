@@ -1,4 +1,5 @@
 import { AideError } from './errors';
+import { supportsTemperature } from './capabilities';
 import { createAnthropicAdapter } from './anthropic';
 import { createGeminiAdapter } from './gemini';
 import { createOpenAiCompatibleAdapter } from './openai-compatible';
@@ -11,14 +12,6 @@ import {
 	type ObsAideSettings,
 } from '../settings/types';
 import type { ProviderAdapter, ProviderId } from './types';
-
-/**
- * OpenAI's reasoning-model families reject `temperature` outright, so it is
- * omitted for them rather than sent and silently ignored.
- */
-function openAiSupportsTemperature(model: string): boolean {
-	return !/^(o\d|gpt-5)/i.test(model);
-}
 
 /**
  * Build the adapter for a provider using the user's current configuration.
@@ -48,6 +41,11 @@ export function createAdapter(
 		label: providerLabel(settings, id),
 	};
 
+	// Every OpenAI-dialect adapter consults the same capability table, so a
+	// model that rejects `temperature` never receives it regardless of which
+	// gateway it is reached through.
+	const allowsTemperature = (model: string): boolean => supportsTemperature(id, model);
+
 	switch (id) {
 		case 'anthropic':
 			return createAnthropicAdapter(connection);
@@ -60,7 +58,7 @@ export function createAdapter(
 				baseUrl: connection.baseUrl,
 				apiKey: connection.apiKey,
 				maxTokensField: 'max_completion_tokens',
-				supportsTemperature: openAiSupportsTemperature,
+				supportsTemperature: allowsTemperature,
 			});
 		case 'openrouter':
 			return createOpenAiCompatibleAdapter({
@@ -68,6 +66,7 @@ export function createAdapter(
 				label: getProviderDescriptor(id).label,
 				baseUrl: connection.baseUrl,
 				apiKey: connection.apiKey,
+				supportsTemperature: allowsTemperature,
 				parseModels: parseOpenRouterModels,
 			});
 		case 'groq':
@@ -77,6 +76,7 @@ export function createAdapter(
 				label: getProviderDescriptor(id).label,
 				baseUrl: connection.baseUrl,
 				apiKey: connection.apiKey,
+				supportsTemperature: allowsTemperature,
 			});
 		case 'custom':
 			return createOpenAiCompatibleAdapter({
@@ -84,6 +84,7 @@ export function createAdapter(
 				label: connection.label ?? 'Custom',
 				baseUrl: connection.baseUrl,
 				apiKey: connection.apiKey,
+				supportsTemperature: allowsTemperature,
 			});
 	}
 }

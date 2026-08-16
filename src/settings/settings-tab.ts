@@ -107,23 +107,32 @@ export class ObsAideSettingTab extends PluginSettingTab {
 				}),
 			);
 
-		new Setting(container)
-			.setName('Temperature')
-			.setDesc('Lower is more focused, higher is more varied.')
-			.addSlider((slider) =>
-				slider
-					.setLimits(TEMPERATURE_RANGE.min, TEMPERATURE_RANGE.max, TEMPERATURE_RANGE.step)
-					.setValue(settings.temperature)
-					.setDynamicTooltip()
-					.onChange(async (value) => {
-						settings.temperature = value;
-						await this.save();
-					}),
+		const temperature = new Setting(container)
+			.setName('Temperature / creativity')
+			.setDesc(
+				'Lower is more focused and predictable; higher is more varied. Models that do not accept this setting simply do not receive it.',
 			);
+		const temperatureValue = temperature.controlEl.createSpan({
+			cls: 'obsaide-slider-value',
+			text: settings.temperature.toFixed(2),
+		});
+		temperature.addSlider((slider) =>
+			slider
+				.setLimits(TEMPERATURE_RANGE.min, TEMPERATURE_RANGE.max, TEMPERATURE_RANGE.step)
+				.setValue(settings.temperature)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					settings.temperature = value;
+					temperatureValue.setText(value.toFixed(2));
+					await this.save();
+				}),
+		);
 
 		new Setting(container)
 			.setName('Maximum response length')
-			.setDesc(`Upper bound on generated tokens (${MAX_OUTPUT_TOKENS_RANGE.min}–${MAX_OUTPUT_TOKENS_RANGE.max}).`)
+			.setDesc(
+				`A cap, not a target: length is governed by the prompt. Between ${MAX_OUTPUT_TOKENS_RANGE.min} and ${MAX_OUTPUT_TOKENS_RANGE.max} tokens.`,
+			)
 			.addText((text) =>
 				text
 					.setValue(String(settings.maxOutputTokens))

@@ -4,6 +4,7 @@ import {
 	providerLabel,
 	type ObsAideSettings,
 } from '../settings/types';
+import { resolveTemperature } from './capabilities';
 import { getProviderDescriptor } from './catalog';
 import { listModels, runChat, type RunChatOptions } from './client';
 import { AideError } from './errors';
@@ -95,7 +96,13 @@ export class ProviderService {
 				model: options.model,
 				messages: options.messages,
 				system: options.system,
-				temperature: settings.temperature,
+				// Clamped to what this provider documents, and omitted entirely
+				// for models that reject the parameter.
+				temperature: resolveTemperature(
+					options.providerId,
+					options.model,
+					settings.temperature,
+				),
 				maxOutputTokens: options.maxOutputTokens ?? settings.maxOutputTokens,
 			},
 			this.http,
