@@ -29,4 +29,13 @@ export default defineConfig(
 		},
 	},
 	...obsidianmd.configs.recommended,
+	{
+		// `requestUrl` cannot expose a readable body, so streaming responses are
+		// impossible without `fetch`. Exactly one module is allowed to use it,
+		// and it falls back to `requestUrl` whenever `fetch` is refused.
+		files: ['src/providers/obsidian-http.ts'],
+		rules: {
+			'no-restricted-globals': 'off',
+		},
+	},
 );

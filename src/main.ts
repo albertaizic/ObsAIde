@@ -1,4 +1,7 @@
 import { Plugin } from 'obsidian';
+import { ObsidianHttpClient } from './providers/obsidian-http';
+import { ProviderService } from './providers/service';
+import { createDefaultSettings, normalizeSettings, type ObsAideSettings } from './settings/types';
 
 /**
  * ObsAIde plugin entry point.
@@ -8,7 +11,18 @@ import { Plugin } from 'obsidian';
  * modules.
  */
 export default class ObsAidePlugin extends Plugin {
+	settings: ObsAideSettings = createDefaultSettings();
+	providers!: ProviderService;
+
 	async onload(): Promise<void> {
-		await Promise.resolve();
+		this.settings = normalizeSettings(await this.loadData());
+		this.providers = new ProviderService(() => this.settings, new ObsidianHttpClient());
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+		// Connection details may have changed; discovered models are no longer
+		// guaranteed to match the configured endpoint.
+		this.providers.invalidateModels();
 	}
 }
