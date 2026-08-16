@@ -1,0 +1,39 @@
+/**
+ * Context is always something the user attached on purpose.
+ *
+ * ObsAIde never reads the vault in the background: an attachment is created
+ * only by an explicit action (choosing a note, invoking Ask Aide on a
+ * selection, running a note action) and is visible in the composer before the
+ * request is sent.
+ */
+export type AttachmentKind = 'selection' | 'note';
+
+export interface Attachment {
+	id: string;
+	kind: AttachmentKind;
+	/** Vault path of the note, or of the note a selection came from. */
+	path?: string;
+	/** Label shown on the chip. */
+	title: string;
+	/**
+	 * Captured text. Selections are snapshotted at capture time because the
+	 * editor moves on; notes are re-read from the vault when the request is
+	 * sent, so the model always sees the current file.
+	 */
+	text?: string;
+	/** 1-based inclusive line range for a selection. */
+	lines?: { from: number; to: number };
+}
+
+export interface ResolvedAttachment {
+	attachment: Attachment;
+	content: string;
+	truncated: boolean;
+	/** Set when the note could not be read, e.g. it was deleted or renamed. */
+	missing?: boolean;
+}
+
+export interface ContextLimits {
+	maxCharsPerNote: number;
+	maxContextChars: number;
+}

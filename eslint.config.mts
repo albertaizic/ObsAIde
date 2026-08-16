@@ -30,6 +30,28 @@ export default defineConfig(
 	},
 	...obsidianmd.configs.recommended,
 	{
+		// "ObsAIde" and "Aide" are product names, so sentence case must not
+		// lowercase them.
+		rules: {
+			'obsidianmd/ui/sentence-case': [
+				'warn',
+				{ brands: ['ObsAIde', 'Aide', 'Obsidian'] },
+			],
+			'obsidianmd/ui/sentence-case-json': [
+				'warn',
+				{ brands: ['ObsAIde', 'Aide'] },
+			],
+		},
+	},
+	{
+		// The conversation store is deliberately free of Obsidian and DOM APIs
+		// so it can be unit tested; its debounce timer is not window-bound.
+		files: ['src/chat/store.ts'],
+		rules: {
+			'obsidianmd/prefer-window-timers': 'off',
+		},
+	},
+	{
 		// `requestUrl` cannot expose a readable body, so streaming responses are
 		// impossible without `fetch`. Exactly one module is allowed to use it,
 		// and it falls back to `requestUrl` whenever `fetch` is refused.

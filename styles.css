@@ -6,10 +6,658 @@
  * hardcoded colours.
  */
 
+/* ------------------------------------------------------------------ layout */
+
 .obsaide-view {
 	--obsaide-gap: var(--size-4-2);
 	--obsaide-radius: var(--radius-m);
-	--obsaide-surface: var(--background-secondary);
-	--obsaide-surface-alt: var(--background-primary-alt);
-	--obsaide-border: var(--background-modifier-border);
+
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	min-width: 0;
+	padding: 0;
+	overflow: hidden;
+}
+
+/* The view fills its leaf; only the transcript scrolls. */
+.workspace-leaf-content[data-type='obsaide-chat'] .view-content {
+	padding: 0;
+	overflow: hidden;
+}
+
+/* ------------------------------------------------------------------ header */
+
+.obsaide-header {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	padding: var(--size-4-2) var(--size-4-3);
+	border-bottom: 1px solid var(--background-modifier-border);
+	flex-wrap: wrap;
+}
+
+.obsaide-selectors {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	min-width: 0;
+	flex: 1 1 auto;
+}
+
+.obsaide-select {
+	all: unset;
+	cursor: pointer;
+	padding: 2px var(--size-4-2);
+	border-radius: var(--obsaide-radius);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-normal);
+	background-color: var(--background-modifier-form-field);
+	border: 1px solid var(--background-modifier-border);
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	line-height: var(--line-height-tight);
+}
+
+.obsaide-select:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.obsaide-select:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.obsaide-select.is-model {
+	color: var(--text-muted);
+	flex-shrink: 1;
+	min-width: 0;
+}
+
+.obsaide-select.is-unconfigured {
+	color: var(--text-warning);
+}
+
+.obsaide-header-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex: 0 0 auto;
+}
+
+.obsaide-mode-badge {
+	display: none;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-accent);
+	border: 1px solid var(--text-accent);
+	border-radius: var(--radius-s);
+	padding: 0 var(--size-4-1);
+	margin-right: var(--size-4-1);
+}
+
+.obsaide-mode-badge.is-visible {
+	display: inline-block;
+}
+
+/* ----------------------------------------------------------------- buttons */
+
+.obsaide-icon-button {
+	all: unset;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+}
+
+.obsaide-icon-button:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.obsaide-icon-button:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.obsaide-icon-button.is-small {
+	width: 24px;
+	height: 24px;
+}
+
+.obsaide-icon-button.is-small .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.obsaide-button {
+	all: unset;
+	cursor: pointer;
+	padding: var(--size-4-1) var(--size-4-3);
+	border-radius: var(--obsaide-radius);
+	font-size: var(--font-ui-smaller);
+	background-color: var(--interactive-normal);
+	color: var(--text-normal);
+	border: 1px solid var(--background-modifier-border);
+	text-align: center;
+}
+
+.obsaide-button:hover {
+	background-color: var(--interactive-hover);
+}
+
+.obsaide-button:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.obsaide-button.is-cta {
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-color: transparent;
+}
+
+.obsaide-button.is-cta:hover {
+	background-color: var(--interactive-accent-hover);
+}
+
+.obsaide-button.is-small {
+	padding: 1px var(--size-4-2);
+}
+
+/* -------------------------------------------------------------- transcript */
+
+.obsaide-messages {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding: var(--size-4-3);
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-4);
+	min-width: 0;
+}
+
+.obsaide-message {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+	min-width: 0;
+}
+
+.obsaide-message-head {
+	display: flex;
+	align-items: baseline;
+	gap: var(--size-4-2);
+	min-width: 0;
+}
+
+.obsaide-message-role {
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-semibold);
+	color: var(--text-muted);
+}
+
+.obsaide-message.is-assistant .obsaide-message-role {
+	color: var(--text-accent);
+}
+
+.obsaide-message-tag {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 0 var(--size-4-1);
+}
+
+.obsaide-message-model {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	margin-left: auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 45%;
+}
+
+.obsaide-message-body {
+	min-width: 0;
+	overflow-wrap: anywhere;
+	font-size: var(--font-ui-small);
+	line-height: var(--line-height-normal);
+}
+
+.obsaide-message.is-user .obsaide-message-body {
+	background-color: var(--background-modifier-form-field);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--obsaide-radius);
+	padding: var(--size-4-2);
+}
+
+.obsaide-user-text {
+	white-space: pre-wrap;
+}
+
+.obsaide-message-body > *:first-child {
+	margin-top: 0;
+}
+
+.obsaide-message-body > *:last-child {
+	margin-bottom: 0;
+}
+
+.obsaide-message-body pre {
+	max-width: 100%;
+	overflow-x: auto;
+}
+
+.obsaide-message-body table {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+}
+
+.obsaide-message-note {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-style: italic;
+}
+
+.obsaide-message-actions {
+	display: flex;
+	gap: 2px;
+	opacity: 0;
+	transition: opacity 120ms ease-in-out;
+}
+
+.obsaide-message:hover .obsaide-message-actions,
+.obsaide-message:focus-within .obsaide-message-actions {
+	opacity: 1;
+}
+
+/* Touch devices have no hover, so the actions stay visible there. */
+@media (hover: none) {
+	.obsaide-message-actions {
+		opacity: 1;
+	}
+}
+
+/* -------------------------------------------------------------- code blocks */
+
+.obsaide-pre {
+	position: relative;
+}
+
+.obsaide-copy-code {
+	all: unset;
+	position: absolute;
+	top: var(--size-4-1);
+	right: var(--size-4-1);
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	opacity: 0;
+	transition: opacity 120ms ease-in-out;
+}
+
+.obsaide-pre:hover .obsaide-copy-code,
+.obsaide-copy-code:focus-visible {
+	opacity: 1;
+}
+
+.obsaide-copy-code .svg-icon {
+	width: 13px;
+	height: 13px;
+}
+
+/* ------------------------------------------------------------------ waiting */
+
+.obsaide-waiting {
+	display: flex;
+	gap: 4px;
+	padding: var(--size-4-2) 0;
+}
+
+.obsaide-dot {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background-color: var(--text-faint);
+	animation: obsaide-pulse 1.2s infinite ease-in-out;
+}
+
+.obsaide-dot:nth-child(2) {
+	animation-delay: 0.15s;
+}
+
+.obsaide-dot:nth-child(3) {
+	animation-delay: 0.3s;
+}
+
+@keyframes obsaide-pulse {
+	0%,
+	80%,
+	100% {
+		opacity: 0.25;
+	}
+	40% {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.obsaide-dot {
+		animation: none;
+		opacity: 0.5;
+	}
+}
+
+/* ------------------------------------------------------------------- errors */
+
+.obsaide-error {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2);
+	border-radius: var(--obsaide-radius);
+	border: 1px solid var(--background-modifier-error);
+	background-color: var(--background-modifier-error-hover);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-normal);
+}
+
+.obsaide-error-icon {
+	display: inline-flex;
+	color: var(--text-error);
+	flex: 0 0 auto;
+}
+
+.obsaide-error-icon .svg-icon {
+	width: 15px;
+	height: 15px;
+}
+
+.obsaide-error-text {
+	flex: 1 1 160px;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.obsaide-error-actions {
+	display: flex;
+	gap: var(--size-4-1);
+	flex: 0 0 auto;
+}
+
+/* -------------------------------------------------------------- empty state */
+
+.obsaide-empty {
+	margin: auto;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	text-align: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-4) var(--size-4-2);
+	max-width: 320px;
+}
+
+.obsaide-empty-icon {
+	color: var(--text-faint);
+}
+
+.obsaide-empty-icon .svg-icon {
+	width: 28px;
+	height: 28px;
+}
+
+.obsaide-empty h3 {
+	margin: 0;
+	font-size: var(--font-ui-medium);
+}
+
+.obsaide-empty-text {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: var(--line-height-normal);
+}
+
+.obsaide-empty-hint {
+	margin: 0;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	overflow-wrap: anywhere;
+}
+
+.obsaide-suggestions {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+	width: 100%;
+}
+
+.obsaide-suggestion {
+	all: unset;
+	cursor: pointer;
+	padding: var(--size-4-1) var(--size-4-2);
+	border-radius: var(--obsaide-radius);
+	border: 1px solid var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	text-align: left;
+}
+
+.obsaide-suggestion:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.obsaide-suggestion:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+/* ----------------------------------------------------------------- composer */
+
+.obsaide-composer {
+	border-top: 1px solid var(--background-modifier-border);
+	padding: var(--size-4-2) var(--size-4-3) var(--size-4-3);
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	background-color: var(--background-primary);
+}
+
+.obsaide-context-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--size-4-1);
+	min-width: 0;
+}
+
+.obsaide-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-1);
+	min-width: 0;
+}
+
+.obsaide-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	max-width: 100%;
+	padding: 1px var(--size-4-1);
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	min-width: 0;
+}
+
+.obsaide-chip.is-action {
+	all: unset;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 1px var(--size-4-1);
+	border-radius: var(--radius-s);
+	border: 1px dashed var(--background-modifier-border);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.obsaide-chip.is-action:hover {
+	color: var(--text-normal);
+	border-color: var(--background-modifier-border-hover);
+}
+
+.obsaide-chip.is-action:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.obsaide-chip-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+
+.obsaide-chip-icon .svg-icon {
+	width: 12px;
+	height: 12px;
+}
+
+.obsaide-chip-label {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
+.obsaide-chip-remove {
+	all: unset;
+	cursor: pointer;
+	display: inline-flex;
+	color: var(--text-faint);
+	flex: 0 0 auto;
+}
+
+.obsaide-chip-remove:hover {
+	color: var(--text-normal);
+}
+
+.obsaide-chip-remove .svg-icon {
+	width: 12px;
+	height: 12px;
+}
+
+.obsaide-input-row {
+	display: flex;
+	align-items: flex-end;
+	gap: var(--size-4-2);
+	min-width: 0;
+}
+
+.obsaide-textarea {
+	flex: 1 1 auto;
+	min-width: 0;
+	resize: none;
+	overflow-y: auto;
+	max-height: 220px;
+	font-size: var(--font-ui-small);
+	line-height: var(--line-height-normal);
+	padding: var(--size-4-2);
+	border-radius: var(--obsaide-radius);
+}
+
+.obsaide-send {
+	all: unset;
+	cursor: pointer;
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	border-radius: var(--radius-s);
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.obsaide-send:hover {
+	background-color: var(--interactive-accent-hover);
+}
+
+.obsaide-send:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+.obsaide-send.is-stop {
+	background-color: var(--background-modifier-error);
+}
+
+.obsaide-send .svg-icon {
+	width: 16px;
+	height: 16px;
+}
+
+.obsaide-hint {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+/* Narrow sidebars drop the keyboard hint rather than wrapping it. */
+@container (max-width: 260px) {
+	.obsaide-hint {
+		display: none;
+	}
+}
+
+/* ------------------------------------------------------------------- modals */
+
+.obsaide-model-suggestion {
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+.obsaide-model-title {
+	color: var(--text-normal);
+}
+
+.obsaide-model-meta {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.obsaide-modal-description {
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	margin-top: 0;
+}
+
+.obsaide-prompt-field {
+	border-top: none;
+	padding-top: 0;
+}
+
+.obsaide-prompt-field .setting-item-control {
+	width: 100%;
+}
+
+.obsaide-prompt-field textarea,
+.obsaide-prompt-field input[type='text'] {
+	width: 100%;
 }
