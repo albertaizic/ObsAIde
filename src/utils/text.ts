@@ -10,7 +10,8 @@ export interface TruncationResult {
  * never leave a half-written Markdown construct dangling.
  */
 export function truncateText(text: string, limit: number): TruncationResult {
-	if (limit <= 0 || text.length <= limit) {
+	// A negative limit means "no limit"; zero really does mean nothing fits.
+	if (limit < 0 || text.length <= limit) {
 		return { text, truncated: false };
 	}
 	const slice = text.slice(0, limit);

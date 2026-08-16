@@ -196,7 +196,7 @@ export function createOpenAiCompatibleAdapter(
 			const finishReason = mapFinishReason(getString(choice, 'finish_reason'));
 			const usage = readUsage(payload);
 			const model = getString(payload, 'model');
-			if (finishReason || usage || (model && events.length === 0)) {
+			if (finishReason || usage || model) {
 				events.push({ type: 'meta', model, finishReason, usage });
 			}
 			return events;
