@@ -1,19 +1,29 @@
-# Obsidian community plugin
+# ObsAIde — contributor guide
 
 ## Project overview
 
 - Target: Obsidian Community Plugin (TypeScript → bundled JavaScript).
+- Plugin ID: `obsaide`. Assistant name in the UI: **Aide**. Neither may change.
 - Entry point: `src/main.ts` compiled to `main.js` and loaded by Obsidian.
 - Required release artifacts: `main.js`, `manifest.json`, and optional `styles.css`.
+- See `README.md` for the feature set and the module map.
+
+## ObsAIde-specific rules
+
+- `src/providers/` is the only place that knows about a vendor's HTTP API. Everything else speaks the vocabulary in `src/providers/types.ts`.
+- Adapters build request specs and parse payloads; they never perform I/O. That is what makes them testable without the network.
+- Prompt text lives in `src/prompts/`. Do not inline prompt strings in UI code.
+- Never log, display or transmit an API key. Anything that reaches the user goes through `redactSecrets` first.
+- No note is read unless the user attached it. No background scanning, no indexing, no telemetry.
+- AI output must never be written to a note without an explicit user action.
 
 ## Environment & tooling
 
-- Node.js: use current LTS (Node 18+ recommended).
-- **Package manager: npm** (required for this sample - `package.json` defines npm scripts and dependencies).
-- **Bundler: esbuild** (required for this sample - `esbuild.config.mjs` and build scripts depend on it). Alternative bundlers like Rollup or webpack are acceptable for other projects if they bundle all external dependencies into `main.js`.
+- Node.js: use current LTS (Node 20+ recommended).
+- **Package manager: npm** — `package.json` defines the scripts and dependencies.
+- **Bundler: esbuild** — `esbuild.config.mjs` bundles every dependency into `main.js`.
+- **Tests: vitest** — `npm test`. Tests must never call a live AI API.
 - Types: `obsidian` type definitions.
-
-**Note**: This sample project has specific technical dependencies on npm and esbuild. If you're creating a plugin from scratch, you can choose different tools, but you'll need to replace the build configuration accordingly.
 
 ### Install
 
@@ -43,22 +53,21 @@ npm run build
 
 - **Organize code into multiple files**: Split functionality across separate modules rather than putting everything in `main.ts`.
 - Source lives in `src/`. Keep `main.ts` small and focused on plugin lifecycle (loading, unloading, registering commands).
-- **Example file structure**:
+- **Current structure** (see `README.md` → Architecture for what each folder is for):
     ```
     src/
-      main.ts           # Plugin entry point, lifecycle management
-      settings.ts       # Settings interface and defaults
-      commands/         # Command implementations
-        command1.ts
-        command2.ts
-      ui/              # UI components, modals, views
-        modal.ts
-        view.ts
-      utils/           # Utility functions, helpers
-        helpers.ts
-        constants.ts
-      types.ts         # TypeScript interfaces and types
+      main.ts       # Plugin lifecycle and registration only
+      commands.ts   # Command palette and editor menu
+      providers/    # Provider adapters, transport, error normalisation
+      chat/         # Conversation model, local store, chat controller
+      context/      # Attachment capture, resolution and formatting
+      actions/      # Note action registry, runner, safe apply
+      prompts/      # All prompt text
+      settings/     # Settings schema, validation and settings tab
+      ui/           # Views and modals
+      utils/        # Ids, text, diff, secret redaction
     ```
+- Tests live next to the code they cover as `*.test.ts` and must not import `obsidian`.
 - **Do not commit build artifacts**: Never commit `node_modules/`, `main.js`, or other generated files to version control.
 - Keep the plugin small. Avoid large dependencies. Prefer browser-compatible packages.
 - Generated output should be placed at the plugin root or `dist/` depending on your build setup. Release artifacts must end up at the top level of the plugin folder in the vault (`main.js`, `manifest.json`, `styles.css`).
