@@ -4,6 +4,7 @@ import {
 	createDefaultSettings,
 	findConfigurationIssue,
 	isProviderConfigured,
+	needsMigration,
 	normalizeSettings,
 	providerLabel,
 	resolveBaseUrl,
@@ -30,9 +31,23 @@ describe('normalizeSettings', () => {
 			maxOutputTokens: 1,
 			maxCharsPerNote: 10 ** 9,
 		});
-		expect(settings.temperature).toBe(2);
+		expect(settings.temperature).toBe(1);
 		expect(settings.maxOutputTokens).toBe(256);
 		expect(settings.maxCharsPerNote).toBe(200_000);
+	});
+
+	it('migrates a temperature stored above the new maximum', () => {
+		// The old schema allowed up to 2.0, which produced incoherent output.
+		expect(normalizeSettings({ schemaVersion: 1, temperature: 2 }).temperature).toBe(1);
+		expect(normalizeSettings({ schemaVersion: 1, temperature: 1.4 }).temperature).toBe(1);
+	});
+
+	it('defaults to a focused temperature', () => {
+		expect(createDefaultSettings().temperature).toBe(0.3);
+	});
+
+	it('caps a stored output-token value at the new maximum', () => {
+		expect(normalizeSettings({ maxOutputTokens: 32_000 }).maxOutputTokens).toBe(16_000);
 	});
 
 	it('rejects an unknown default provider', () => {
@@ -87,6 +102,27 @@ describe('provider configuration', () => {
 		settings.customProviderLabel = 'Home server';
 		expect(providerLabel(settings, 'custom')).toBe('Home server');
 		expect(providerLabel(settings, 'groq')).toBe('Groq');
+	});
+});
+
+describe('needsMigration', () => {
+	it('is true when a clamped value differs from what was stored', () => {
+		const raw = { schemaVersion: 1, temperature: 2 };
+		expect(needsMigration(raw, normalizeSettings(raw))).toBe(true);
+	});
+
+	it('is true when the schema version is behind', () => {
+		const raw = { schemaVersion: 1, temperature: 0.3, maxOutputTokens: 4096 };
+		expect(needsMigration(raw, normalizeSettings(raw))).toBe(true);
+	});
+
+	it('is false for settings already in the current shape', () => {
+		const settings = createDefaultSettings();
+		expect(needsMigration({ ...settings }, normalizeSettings({ ...settings }))).toBe(false);
+	});
+
+	it('is false when there is nothing stored yet', () => {
+		expect(needsMigration(undefined, createDefaultSettings())).toBe(false);
 	});
 });
 

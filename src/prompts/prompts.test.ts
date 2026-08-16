@@ -9,6 +9,28 @@ describe('buildSystemPrompt', () => {
 		expect(buildSystemPrompt({ mode: 'tutor' })).toContain('patient tutor');
 	});
 
+	it('tells the default persona to be direct and skip filler', () => {
+		const prompt = buildSystemPrompt({ mode: 'chat' });
+		expect(prompt).toContain('Lead with the answer');
+		expect(prompt).toContain('no restating the question');
+		expect(prompt).toContain('Here is…');
+		expect(prompt).toContain('Match length to the question');
+		expect(prompt).toContain('No closing summary');
+	});
+
+	it('tells the default persona to return note content as the answer', () => {
+		const prompt = buildSystemPrompt({ mode: 'chat' });
+		expect(prompt).toContain('write, draft, continue, expand or add');
+		expect(prompt).toContain('output the note content itself and nothing else');
+		expect(prompt).toContain("Here's a paragraph you could add");
+	});
+
+	it('keeps tutor mode free to explain at length', () => {
+		const tutor = buildSystemPrompt({ mode: 'tutor' });
+		expect(tutor).toContain('Take the space you need');
+		expect(tutor).not.toContain('Match length to the question');
+	});
+
 	it('appends action and user instructions in that order', () => {
 		const prompt = buildSystemPrompt({
 			mode: 'chat',

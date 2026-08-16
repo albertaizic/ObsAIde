@@ -128,6 +128,23 @@ describe('OpenAI parameter differences', () => {
 		expect(body(adapter.buildChatRequest({ ...REQUEST, model: 'gpt-4.1' }).body)['temperature'])
 			.toBe(0.4);
 	});
+
+	it('applies the same rule to OpenRouter-hosted OpenAI models', () => {
+		const routed = createDefaultSettings();
+		routed.providers.openrouter.apiKey = 'sk-or';
+		const adapter = createAdapter(routed, 'openrouter');
+
+		expect(
+			body(adapter.buildChatRequest({ ...REQUEST, model: 'openai/gpt-5.1' }).body)[
+				'temperature'
+			],
+		).toBeUndefined();
+		expect(
+			body(
+				adapter.buildChatRequest({ ...REQUEST, model: 'anthropic/claude-sonnet-4.5' }).body,
+			)['temperature'],
+		).toBe(0.4);
+	});
 });
 
 describe('Anthropic adapter', () => {
