@@ -1,8 +1,11 @@
 import { Modal, Platform, setIcon, setTooltip, type App } from 'obsidian';
 import { ASSISTANT_NAME } from '../constants';
-import { captureNote, isDuplicateAttachment } from '../context/collect';
+import { captureFolder, captureNote, isDuplicateAttachment } from '../context/collect';
 import type { Attachment } from '../context/types';
 import { formatApproxTokens, summarize } from '../utils/text';
+import { AttachmentDetailsModal } from './attachment-details';
+import { FolderPickerModal } from './folder-picker';
+import { attachmentIcon, attachmentLabel } from './attachment-chip';
 import { NotePickerModal } from './note-picker';
 
 export interface AskModalOptions {
@@ -46,12 +49,23 @@ export class AskAideModal extends Modal {
 
 		const contextRow = contentEl.createDiv({ cls: 'obsaide-context-row' });
 		this.chipsEl = contextRow.createDiv({ cls: 'obsaide-chips' });
-		const addButton = contextRow.createEl('button', { cls: 'obsaide-chip is-action' });
-		const addIcon = addButton.createSpan({ cls: 'obsaide-chip-icon' });
-		setIcon(addIcon, 'plus');
-		addButton.createSpan({ cls: 'obsaide-chip-label', text: 'Add note' });
-		addButton.addEventListener('click', () => {
-			new NotePickerModal(this.app, (file) => this.addAttachment(captureNote(file))).open();
+
+		const addNote = contextRow.createEl('button', { cls: 'obsaide-chip is-action' });
+		setIcon(addNote.createSpan({ cls: 'obsaide-chip-icon' }), 'plus');
+		addNote.createSpan({ cls: 'obsaide-chip-label', text: 'Add note' });
+		addNote.addEventListener('click', () => {
+			new NotePickerModal(this.app, (file) =>
+				this.addAttachment(captureNote(file, 'supporting')),
+			).open();
+		});
+
+		const addFolder = contextRow.createEl('button', { cls: 'obsaide-chip is-action' });
+		setIcon(addFolder.createSpan({ cls: 'obsaide-chip-icon' }), 'folder');
+		addFolder.createSpan({ cls: 'obsaide-chip-label', text: 'Add folder' });
+		addFolder.addEventListener('click', () => {
+			new FolderPickerModal(this.app, (folder) =>
+				this.addAttachment(captureFolder(this.app, folder, 'supporting')),
+			).open();
 		});
 
 		this.previewEl = contentEl.createDiv({ cls: 'obsaide-ask-preview' });
@@ -113,12 +127,25 @@ export class AskAideModal extends Modal {
 		for (const attachment of this.attachments) {
 			const chip = this.chipsEl.createDiv({ cls: 'obsaide-chip' });
 			const icon = chip.createSpan({ cls: 'obsaide-chip-icon' });
-			setIcon(icon, attachment.kind === 'selection' ? 'text-cursor-input' : 'file-text');
-			chip.createSpan({
+			setIcon(icon, attachmentIcon(attachment.kind));
+
+			const label = chip.createSpan({
 				cls: 'obsaide-chip-label',
-				text: summarize(attachment.title, 32),
+				text: summarize(attachmentLabel(attachment), 32),
+			});
+			// Say plainly which part is the question and which is background.
+			chip.createSpan({
+				cls: 'obsaide-chip-role',
+				text: attachment.role === 'supporting' ? 'context' : 'primary',
 			});
 			setTooltip(chip, attachment.path ?? attachment.title);
+
+			if (attachment.kind === 'folder') {
+				label.addClass('is-clickable');
+				label.addEventListener('click', () =>
+					new AttachmentDetailsModal(this.app, attachment).open(),
+				);
+			}
 
 			const remove = chip.createEl('button', {
 				cls: 'obsaide-chip-remove',

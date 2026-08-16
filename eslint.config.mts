@@ -35,7 +35,7 @@ export default defineConfig(
 		rules: {
 			'obsidianmd/ui/sentence-case': [
 				'warn',
-				{ brands: ['ObsAIde', 'Aide', 'Obsidian'] },
+				{ brands: ['ObsAIde', 'Aide', 'Obsidian', 'Markdown'] },
 			],
 			'obsidianmd/ui/sentence-case-json': [
 				'warn',

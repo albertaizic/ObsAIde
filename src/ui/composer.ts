@@ -1,6 +1,7 @@
 import { setIcon, setTooltip } from 'obsidian';
 import type { Attachment } from '../context/types';
 import { summarize } from '../utils/text';
+import { attachmentIcon, attachmentLabel } from './attachment-chip';
 
 export interface ComposerCallbacks {
 	onSend: (text: string) => void;
@@ -8,6 +9,8 @@ export interface ComposerCallbacks {
 	/** Anchor for the "add context" menu. */
 	onAddContext: (anchor: HTMLElement) => void;
 	onRemoveAttachment: (id: string) => void;
+	/** Show which notes a folder attachment covers. */
+	onInspectAttachment: (attachment: Attachment) => void;
 }
 
 const MAX_TEXTAREA_HEIGHT = 220;
@@ -86,12 +89,24 @@ export class Composer {
 		for (const attachment of attachments) {
 			const chip = this.attachmentsEl.createDiv({ cls: 'obsaide-chip' });
 			const icon = chip.createSpan({ cls: 'obsaide-chip-icon' });
-			setIcon(icon, attachment.kind === 'selection' ? 'text-cursor-input' : 'file-text');
-			chip.createSpan({
+			setIcon(icon, attachmentIcon(attachment.kind));
+
+			const label = chip.createSpan({
 				cls: 'obsaide-chip-label',
-				text: summarize(attachment.title, 28),
+				text: summarize(attachmentLabel(attachment), 30),
 			});
+			if (attachment.role === 'supporting') {
+				chip.createSpan({ cls: 'obsaide-chip-role', text: 'context' });
+			}
 			setTooltip(chip, attachment.path ?? attachment.title);
+
+			// A folder chip stands for several notes, so make the list reachable.
+			if (attachment.kind === 'folder') {
+				label.addClass('is-clickable');
+				label.addEventListener('click', () =>
+					this.callbacks.onInspectAttachment(attachment),
+				);
+			}
 
 			const remove = chip.createEl('button', {
 				cls: 'obsaide-chip-remove',
