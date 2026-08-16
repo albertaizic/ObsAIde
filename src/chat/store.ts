@@ -147,7 +147,10 @@ export class ConversationStore {
 		}
 		const file: StoredFile = {
 			version: FILE_VERSION,
-			conversations: this.list().slice(0, this.limit),
+			conversations: this.list()
+				// An untouched conversation is not history worth keeping.
+				.filter((conversation) => conversation.messages.length > 0)
+				.slice(0, this.limit),
 		};
 		await this.storage.write(file).catch(() => undefined);
 	}

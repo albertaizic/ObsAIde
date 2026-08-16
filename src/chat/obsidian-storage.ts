@@ -9,7 +9,18 @@ import type { ConversationStorage } from './store';
  */
 export function createConversationStorage(plugin: Plugin): ConversationStorage {
 	const adapter = plugin.app.vault.adapter;
-	const directory = plugin.manifest.dir ?? '';
+	const directory = plugin.manifest.dir;
+
+	// Without a plugin folder there is nowhere safe to write: a relative path
+	// would land in the vault root, next to the user's notes.
+	if (!directory) {
+		return {
+			read: () => Promise.resolve(undefined),
+			write: () => Promise.resolve(),
+			remove: () => Promise.resolve(),
+		};
+	}
+
 	const path = normalizePath(`${directory}/${CONVERSATIONS_FILE}`);
 
 	return {

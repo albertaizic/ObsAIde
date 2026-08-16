@@ -113,6 +113,10 @@ export class AideChatView extends ItemView {
 
 	/** Queue a turn from outside the view, e.g. from Ask Aide. */
 	async send(request: SendRequest): Promise<void> {
+		if (this.controller.isGenerating) {
+			new Notice(`${ASSISTANT_NAME} is still answering. Stop it first, or wait.`);
+			return;
+		}
 		const attachments = request.attachments ?? this.attachments;
 		this.attachments = [];
 		this.composer.setAttachments(this.attachments);
@@ -188,12 +192,8 @@ export class AideChatView extends ItemView {
 				.setIcon('settings')
 				.onClick(() => this.plugin.openSettings()),
 		);
-		menu.showAtMouseEvent(
-			new MouseEvent('click', {
-				clientX: this.providerButton.getBoundingClientRect().left,
-				clientY: this.providerButton.getBoundingClientRect().bottom,
-			}),
-		);
+		const rect = this.providerButton.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
 	}
 
 	private openModelPicker(): void {
@@ -328,26 +328,20 @@ export class AideChatView extends ItemView {
 		this.streamPending = true;
 		if (this.streamTimer !== null) return;
 		// Markdown re-rendering is not free, so streaming updates are batched on
-		// a fixed interval rather than run per token.
+		// a fixed interval rather than run per token. The timer is created once
+		// per view and idles cheaply between replies.
 		this.streamTimer = window.setInterval(() => {
-			if (!this.streamPending) {
-				window.clearInterval(this.streamTimer ?? 0);
-				this.streamTimer = null;
-				return;
-			}
+			if (!this.streamPending) return;
 			this.streamPending = false;
-			const conversation = this.controller.current;
-			const last = conversation.messages[conversation.messages.length - 1];
-			if (last?.role === 'assistant') this.messageList.updateStreaming(last);
+			const message = this.controller.generatingMessage;
+			if (message) this.messageList.updateStreaming(message);
 		}, STREAM_RENDER_INTERVAL_MS);
 		this.registerInterval(this.streamTimer);
 	}
 
 	private renderAll(): void {
 		const conversation = this.controller.current;
-		const generatingId = this.controller.isGenerating
-			? (conversation.messages[conversation.messages.length - 1]?.id ?? null)
-			: null;
+		const generatingId = this.controller.generatingMessage?.id ?? null;
 
 		this.updateHeader();
 		if (isEmptyConversation(conversation)) {

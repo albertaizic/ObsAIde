@@ -55,7 +55,7 @@ export class Composer {
 		});
 		setIcon(this.sendButton, 'arrow-up');
 		setTooltip(this.sendButton, 'Send');
-		this.sendButton.addEventListener('click', () => this.submit());
+		this.sendButton.addEventListener('click', () => this.stopOrSend());
 
 		root.createDiv({
 			cls: 'obsaide-hint',
@@ -74,7 +74,6 @@ export class Composer {
 		setTooltip(this.sendButton, generating ? 'Stop generating' : 'Send');
 		this.sendButton.setAttribute('aria-label', generating ? 'Stop generating' : 'Send');
 		this.sendButton.toggleClass('is-stop', generating);
-		this.textarea.toggleAttribute('readonly', generating);
 	}
 
 	setText(text: string): void {
@@ -115,11 +114,19 @@ export class Composer {
 		this.submit();
 	}
 
-	private submit(): void {
+	/** The send button doubles as stop; Enter never stops a running reply. */
+	private stopOrSend(): void {
 		if (this.generating) {
 			this.callbacks.onStop();
 			return;
 		}
+		this.submit();
+	}
+
+	private submit(): void {
+		// Drafting the next message while a reply streams is allowed, but Enter
+		// must not send it into a busy conversation.
+		if (this.generating) return;
 		const text = this.textarea.value.trim();
 		if (!text) return;
 		this.textarea.value = '';

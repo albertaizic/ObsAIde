@@ -29,7 +29,9 @@ export class MessageList {
 		private readonly parent: Component,
 		private readonly callbacks: MessageListCallbacks,
 	) {
-		this.container.addEventListener('scroll', () => {
+		// Registered on the view so it is removed with it: scrolling up during a
+		// stream must stop the transcript from yanking itself back down.
+		this.parent.registerDomEvent(this.container, 'scroll', () => {
 			const distance =
 				this.container.scrollHeight -
 				this.container.scrollTop -

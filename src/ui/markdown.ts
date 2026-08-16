@@ -26,17 +26,19 @@ export class MarkdownBlock {
 
 		const token = ++this.renderToken;
 		const child = new Component();
+		// Added before rendering so anything the renderer registers is owned by
+		// a loaded component, and `removeChild` can tear all of it down again.
+		this.parent.addChild(child);
 		const container = createDiv();
 
 		await MarkdownRenderer.render(this.app, markdown, container, this.sourcePath, child);
 		// A newer render started while this one was awaiting; drop this result.
 		if (token !== this.renderToken) {
-			child.unload();
+			this.parent.removeChild(child);
 			return;
 		}
 
-		this.child?.unload();
-		this.parent.addChild(child);
+		if (this.child) this.parent.removeChild(this.child);
 		this.child = child;
 
 		this.el.empty();
@@ -46,7 +48,7 @@ export class MarkdownBlock {
 
 	destroy(): void {
 		this.renderToken += 1;
-		this.child?.unload();
+		if (this.child) this.parent.removeChild(this.child);
 		this.child = null;
 	}
 }

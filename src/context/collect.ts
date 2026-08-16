@@ -11,9 +11,16 @@ export interface EditorTarget {
 }
 
 export function getEditorTarget(app: App): EditorTarget | null {
-	const view = app.workspace.getActiveViewOfType(MarkdownView);
-	if (!view) return null;
-	return { editor: view.editor, file: view.file, view };
+	const active = app.workspace.getActiveViewOfType(MarkdownView);
+	if (active) return { editor: active.editor, file: active.file, view: active };
+
+	// Attaching context from the Aide sidebar means the sidebar holds focus, so
+	// fall back to the note the user was last editing in the main area.
+	const recent = app.workspace.getMostRecentLeaf()?.view;
+	if (recent instanceof MarkdownView) {
+		return { editor: recent.editor, file: recent.file, view: recent };
+	}
+	return null;
 }
 
 /** Snapshot the current selection. Returns `null` when nothing is selected. */

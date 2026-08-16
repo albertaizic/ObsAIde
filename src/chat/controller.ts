@@ -68,6 +68,16 @@ export class ChatController {
 		return this.generatingMessageId !== null;
 	}
 
+	/** The reply currently being written, if any. */
+	get generatingMessage(): ConversationMessage | null {
+		if (!this.generatingMessageId) return null;
+		return (
+			this.conversation.messages.find(
+				(message) => message.id === this.generatingMessageId,
+			) ?? null
+		);
+	}
+
 	get providerId(): ProviderId {
 		return this.deps.getSettings().defaultProvider;
 	}
@@ -91,9 +101,15 @@ export class ChatController {
 	newConversation(): void {
 		this.stop();
 		const settings = this.deps.getSettings();
-		this.conversation = this.deps.store.create(
-			settings.tutorModeByDefault ? 'tutor' : 'chat',
-		);
+		const mode = settings.tutorModeByDefault ? 'tutor' : 'chat';
+		// Starting over in an already-empty conversation would just litter the
+		// history with identical blank entries.
+		if (this.conversation.messages.length === 0) {
+			this.conversation.mode = mode;
+			this.emit('structure');
+			return;
+		}
+		this.conversation = this.deps.store.create(mode);
 		this.emit('structure');
 	}
 
@@ -201,6 +217,9 @@ export class ChatController {
 		const providerId = settings.defaultProvider;
 		const model = settings.providers[providerId].model;
 
+		// Snapshot the history before the placeholder reply joins the list.
+		const history = toProviderMessages(this.conversation);
+
 		const assistant = createMessage('assistant', '', {
 			providerId,
 			model,
@@ -209,7 +228,8 @@ export class ChatController {
 		});
 		this.conversation.messages.push(assistant);
 		this.generatingMessageId = assistant.id;
-		this.abortController = new AbortController();
+		const controller = new AbortController();
+		this.abortController = controller;
 		this.emit('structure');
 
 		const systemPrompt = buildSystemPrompt({
@@ -223,8 +243,8 @@ export class ChatController {
 				providerId,
 				model,
 				system: systemPrompt,
-				messages: toProviderMessages(this.conversation),
-				signal: this.abortController.signal,
+				messages: history,
+				signal: controller.signal,
 				onText: (delta) => {
 					assistant.text += delta;
 					this.emit('stream');
@@ -234,7 +254,7 @@ export class ChatController {
 			// result text only when nothing streamed.
 			if (!assistant.text) assistant.text = result.text;
 			if (result.model) assistant.model = result.model;
-			assistant.stopped = this.abortController.signal.aborted;
+			assistant.stopped = controller.signal.aborted;
 		} catch (error) {
 			this.applyFailure(assistant, error, settings);
 		} finally {

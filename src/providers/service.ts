@@ -50,11 +50,15 @@ export class ProviderService {
 		return providerLabel(this.getSettings(), providerId);
 	}
 
-	/** Providers the user has left switched on, in catalogue order. */
+	/**
+	 * Providers offered in the sidebar picker, in catalogue order. The current
+	 * default is always included, so disabling everything cannot strand the user
+	 * on a provider they can no longer switch away from.
+	 */
 	availableProviders(): ProviderId[] {
 		const settings = this.getSettings();
 		return (Object.keys(settings.providers) as ProviderId[]).filter(
-			(id) => settings.providers[id].enabled,
+			(id) => settings.providers[id].enabled || id === settings.defaultProvider,
 		);
 	}
 

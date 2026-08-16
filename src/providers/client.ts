@@ -132,7 +132,9 @@ async function runStreaming(
 		// buffered path gives a much better error message.
 		return null;
 	}
-	if (!completed && !result.text.trim()) {
+	// Providers that end a stream without a terminator (Gemini) still report a
+	// finish reason, so only a silent, reasonless end counts as an interruption.
+	if (!completed && !result.text.trim() && !result.finishReason) {
 		throw new AideError('stream-interrupted', 'The response stream ended unexpectedly.');
 	}
 	return finishResult(result);
