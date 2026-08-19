@@ -4,6 +4,7 @@ import type { AideMode } from '../prompts/system';
 import type { ChatMessage, ProviderId } from '../providers/types';
 import { createId } from '../utils/id';
 import { summarize } from '../utils/text';
+import type { QuizState } from './quiz';
 
 export interface MessageError {
 	kind: string;
@@ -51,6 +52,14 @@ export interface Conversation {
 	updatedAt: number;
 	mode: AideMode;
 	messages: ConversationMessage[];
+	/** Quiz state when mode is 'quiz'. */
+	quizState?: QuizState;
+	/** Branch metadata. */
+	parentConversationId?: string;
+	branchedFromMessageId?: string;
+	branchName?: string;
+	/** Active profile ID for this conversation. */
+	activeProfileId?: string;
 }
 
 export function createConversation(mode: AideMode): Conversation {
@@ -111,4 +120,28 @@ export function toProviderMessages(conversation: Conversation): ChatMessage[] {
 /** Number of user turns, used for the empty-state check. */
 export function isEmptyConversation(conversation: Conversation): boolean {
 	return conversation.messages.length === 0;
+}
+
+/**
+ * Create a new conversation branched from an existing one at a specific message.
+ *
+ * The new conversation copies history up to and including the specified message.
+ */
+export function createBranch(
+	parent: Conversation,
+	branchedFromMessageId: string,
+): Conversation {
+	const messageIndex = parent.messages.findIndex(m => m.id === branchedFromMessageId);
+	if (messageIndex === -1) {
+		throw new Error(`Message ${branchedFromMessageId} not found in parent conversation`);
+	}
+
+	const branch = createConversation(parent.mode);
+	branch.messages = parent.messages.slice(0, messageIndex + 1).map(msg => ({ ...msg }));
+	branch.parentConversationId = parent.id;
+	branch.branchedFromMessageId = branchedFromMessageId;
+	branch.branchName = `${conversationTitle(parent)} — Branch`;
+	branch.title = branch.branchName;
+
+	return branch;
 }

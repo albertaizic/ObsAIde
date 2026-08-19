@@ -50,8 +50,11 @@ import { MessageList } from './message-list';
 import { ModelPickerModal } from './model-picker';
 import { NotePickerModal } from './note-picker';
 import { PromptModal } from './prompt-modal';
+import { QuizSetupModal } from './quiz-setup-modal';
 import { BottomScroller } from './scroller';
+import { VaultSearchModal } from './vault-search-modal';
 import type ObsAidePlugin from '../main';
+import type { QuizSetupOptions } from '../chat/quiz';
 
 const STREAM_RENDER_INTERVAL_MS = 90;
 
@@ -65,6 +68,7 @@ export class AideChatView extends ItemView {
 	private modelButton!: HTMLButtonElement;
 	private lengthButton!: HTMLButtonElement;
 	private scopeButton!: HTMLButtonElement;
+	private profileButton!: HTMLButtonElement;
 	private modeBadge!: HTMLElement;
 	private scrollerEl!: HTMLElement;
 	private flowEl!: HTMLElement;
@@ -242,6 +246,7 @@ export class AideChatView extends ItemView {
 			onCreateNote: (message) => void this.createNoteFromReply(message),
 			canInsert: (message) => this.resolveTarget(message) !== null,
 			onInspectAttachment: (attachment) => this.inspect(attachment),
+			onBranchFromMessage: (messageId) => this.controller.branchFromMessage(messageId),
 		});
 	}
 
@@ -261,6 +266,10 @@ export class AideChatView extends ItemView {
 		// Context scope selector
 		this.scopeButton = selectors.createEl('button', { cls: 'obsaide-select is-scope' });
 		this.scopeButton.addEventListener('click', () => this.showScopeMenu());
+
+		// Profile selector
+		this.profileButton = selectors.createEl('button', { cls: 'obsaide-select is-profile' });
+		this.profileButton.addEventListener('click', () => this.showProfileMenu());
 
 		const actions = header.createDiv({ cls: 'obsaide-header-actions' });
 		this.modeBadge = actions.createSpan({ cls: 'obsaide-mode-badge', text: 'Tutor' });
@@ -501,6 +510,41 @@ export class AideChatView extends ItemView {
 		setTooltip(this.scopeButton, `${status}. Click to change the context scope.`);
 	}
 
+	private updateProfileButton(): void {
+		const activeProfile = this.plugin.profiles.getActive();
+		this.profileButton.setText(activeProfile.name);
+		setTooltip(this.profileButton, `Profile: ${activeProfile.name}. Click to change.`);
+	}
+
+	private showProfileMenu(): void {
+		const menu = new Menu();
+		const profiles = this.plugin.profiles.getEnabled();
+
+		for (const profile of profiles) {
+			menu.addItem((item) =>
+				item
+					.setTitle(profile.name)
+					.setIcon(profile.icon)
+					.setChecked(profile.id === this.plugin.profiles.getActive().id)
+					.onClick(async () => {
+						await this.plugin.profiles.setActive(profile.id);
+						this.updateProfileButton();
+					}),
+			);
+		}
+
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle('Manage profiles…')
+				.setIcon('settings')
+				.onClick(() => this.plugin.openSettings()),
+		);
+
+		const rect = this.profileButton.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+	}
+
 	/**
 	 * What this scope will actually send, right now — never an ambiguous label.
 	 * Selection with nothing selected must read as empty, not silently swap in
@@ -679,6 +723,13 @@ export class AideChatView extends ItemView {
 					this.controller.setMode(conversation.mode === 'tutor' ? 'chat' : 'tutor'),
 				),
 		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Quiz me…')
+				.setIcon('help-circle')
+				.setDisabled(this.controller.isGenerating || this.attachments.length === 0)
+				.onClick(() => this.openQuizSetup()),
+		);
 		menu.addSeparator();
 		menu.addItem((item) =>
 			item
@@ -720,6 +771,12 @@ export class AideChatView extends ItemView {
 		).open();
 	}
 
+	private openQuizSetup(): void {
+		new QuizSetupModal(this.app, (setup: QuizSetupOptions) => {
+			void this.controller.startQuiz(setup);
+		}).open();
+	}
+
 	/**
 	 * Export the current conversation as a Markdown note.
 	 *
@@ -753,7 +810,9 @@ export class AideChatView extends ItemView {
 			counter++;
 		}
 
-		const content = buildConversationExportContent(conversation, sanitized, mode);
+		// Use the final unique filename (without .md) as the title in the exported note
+		const finalName = finalPath.split(/[/\\]/).pop()?.replace(/\.md$/, '') ?? sanitized;
+		const content = buildConversationExportContent(conversation, finalName, mode);
 
 		void this.app.vault.create(finalPath, content).then(async (file) => {
 			new Notice(`Exported to ${file.basename}`);
@@ -815,6 +874,18 @@ export class AideChatView extends ItemView {
 					new FolderPickerModal(this.app, (folder) =>
 						this.addAttachment(captureFolder(this.app, folder)),
 					).open();
+				}),
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Search vault…')
+				.setIcon('search')
+				.onClick(() => {
+					new VaultSearchModal(this.app, {
+						onSelect: (attachments) => {
+							for (const attachment of attachments) this.addAttachment(attachment);
+						},
+					}).open();
 				}),
 		);
 		if (this.attachments.length > 0) {
@@ -928,6 +999,7 @@ export class AideChatView extends ItemView {
 
 		this.updateLengthButton();
 		this.updateScopeButton();
+		this.updateProfileButton();
 
 		this.modeBadge.toggleClass('is-visible', this.controller.current.mode === 'tutor');
 	}

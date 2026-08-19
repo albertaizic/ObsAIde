@@ -7,7 +7,7 @@ import { buildSystemPrompt, type AideMode } from '../prompts/system';
 import { AideError, toAideError } from '../providers/errors';
 import type { ProviderService } from '../providers/service';
 import type { ProviderId } from '../providers/types';
-import { collectSecrets, type ObsAideSettings } from '../settings/types';
+import { collectSecrets, type ObsAideSettings, type AssistantProfile } from '../settings/types';
 import {
 	composeUserContent,
 	describeContextTrimming,
@@ -16,10 +16,20 @@ import {
 import {
 	createMessage,
 	toProviderMessages,
+	createBranch,
 	type Conversation,
 	type ConversationMessage,
 } from './conversation';
 import type { ConversationStore } from './store';
+import {
+	startQuiz,
+	advanceQuiz,
+	recordAnswer,
+	endQuiz,
+	isQuizComplete,
+	buildQuizUserPrompt,
+	type QuizSetupOptions,
+} from './quiz';
 
 /**
  * `conversation` means a different transcript is now on screen, which is the
@@ -72,9 +82,29 @@ export class ChatController {
 	private lastAnchorView: MarkdownView | null = null;
 
 	constructor(private readonly deps: ChatControllerDeps) {
-		this.conversation = deps.store.mostRecent(
-			deps.getSettings().tutorModeByDefault ? 'tutor' : 'chat',
-		);
+		const settings = deps.getSettings();
+		// Use active profile's default mode, or fall back to tutorModeByDefault
+		const activeProfileId = settings.activeProfileId ?? 'general';
+		const activeProfile = this.getProfileById(activeProfileId);
+		const defaultMode = activeProfile?.id === 'tutor' ? 'tutor' : settings.tutorModeByDefault ? 'tutor' : 'chat';
+
+		this.conversation = deps.store.mostRecent(defaultMode);
+		// Set active profile on conversation if not already set
+		if (!this.conversation.activeProfileId) {
+			this.conversation.activeProfileId = activeProfileId;
+		}
+	}
+
+	/** Get profile by ID from settings. */
+	private getProfileById(id: string): AssistantProfile | undefined {
+		const settings = this.deps.getSettings();
+		// Check built-in profiles first
+		const builtInProfiles = ['general', 'tutor', 'writer', 'coding-assistant', 'researcher'] as const;
+		if (builtInProfiles.includes(id as typeof builtInProfiles[number])) {
+			return { id, name: id, icon: '', instructions: '', responseLength: 'normal' as const, enabled: true, isBuiltIn: true };
+		}
+		// Check custom profiles
+		return settings.profiles.find(p => p.id === id);
 	}
 
 	get current(): Conversation {
@@ -184,6 +214,298 @@ export class ChatController {
 		this.emit('structure');
 	}
 
+	// --- quiz mode ----------------------------------------------------------
+
+	/**
+	 * Start a new quiz with the given setup options.
+	 */
+	async startQuiz(setup: QuizSetupOptions): Promise<void> {
+		if (this.isGenerating) return;
+
+		const settings = this.deps.getSettings();
+		const attachments = this.conversation.quizState?.contextAttachments ?? [];
+
+		// Build context block from attachments
+		let contextBlock = '';
+		if (attachments.length > 0) {
+			const { block } = await buildContextBlock(this.deps.app, attachments, {
+				maxCharsPerNote: settings.maxCharsPerNote,
+				maxContextChars: settings.maxContextChars,
+			});
+			contextBlock = block;
+		}
+
+		// Initialize quiz state
+		const quizState = startQuiz(setup, attachments);
+		this.conversation.mode = 'quiz';
+		this.conversation.quizState = quizState;
+		this.deps.store.touch(this.conversation);
+		this.emit('structure');
+
+		// Generate first question
+		await this.generateQuizQuestion(contextBlock, setup);
+	}
+
+	/**
+	 * Generate the next quiz question.
+	 */
+	private async generateQuizQuestion(contextBlock: string, setup: QuizSetupOptions): Promise<void> {
+		if (!this.conversation.quizState?.active) return;
+
+		const settings = this.deps.getSettings();
+		const providerId = settings.defaultProvider;
+		const model = settings.providers[providerId].model;
+
+		const quizState = this.conversation.quizState;
+		const nextQuestionNum = quizState.currentQuestion + 1;
+
+		// Build the quiz system prompt with context
+		const activeProfile = this.getProfileById(this.conversation.activeProfileId ?? 'general');
+		const systemPrompt = buildSystemPrompt({
+			mode: 'quiz',
+			customInstructions: settings.customInstructions,
+			responseLength: settings.responseLength,
+			profileInstructions: activeProfile?.instructions,
+		});
+
+		// Add context and question number to the prompt
+		const userPrompt = contextBlock
+			? `${contextBlock}\n\n${buildQuizUserPrompt(quizState, setup)}\n\nQuestion ${nextQuestionNum} of ${setup.totalQuestions}:`
+			: `No context attached. Please attach notes first.\n\n${buildQuizUserPrompt(quizState, setup)}`;
+
+		// For quiz mode, we send a special request that includes the quiz context
+		const history = toProviderMessages(this.conversation);
+
+		const assistant = createMessage('assistant', '', {
+			providerId,
+			model,
+			actionLabel: 'Quiz',
+		});
+		this.conversation.messages.push(assistant);
+		this.deps.editTargets.remember(assistant.id, this.lastAnchorView);
+		this.generatingMessageId = assistant.id;
+		const controller = new AbortController();
+		this.abortController = controller;
+		this.emit('structure');
+
+		try {
+			const result = await this.deps.providers.complete({
+				providerId,
+				model,
+				system: systemPrompt,
+				messages: [...history, { role: 'user', content: userPrompt }],
+				signal: controller.signal,
+				onText: (delta) => {
+					assistant.text += delta;
+					this.emit('stream');
+				},
+			});
+			if (!assistant.text) assistant.text = result.text;
+			if (result.model) assistant.model = result.model;
+			assistant.stopped = controller.signal.aborted;
+
+			// Advance quiz state
+			this.conversation.quizState = advanceQuiz(this.conversation.quizState);
+			this.deps.store.touch(this.conversation);
+		} catch (error) {
+			this.applyFailure(assistant, error, settings);
+		} finally {
+			this.generatingMessageId = null;
+			this.abortController = null;
+			this.emit('structure');
+		}
+	}
+
+	/**
+	 * Handle user's answer to a quiz question.
+	 */
+	async answerQuizQuestion(userAnswer: string): Promise<void> {
+		if (this.isGenerating) return;
+		if (!this.conversation.quizState?.active) return;
+
+		const quizState = this.conversation.quizState;
+		const questionIndex = quizState.currentQuestion - 1;
+		const currentQuestion = quizState.questions[questionIndex];
+
+		// Record user's answer (we'll grade after getting the model's evaluation)
+		// For now, we add the user's answer as a message
+		const userMessage = createMessage('user', userAnswer, {
+			actionLabel: 'Quiz Answer',
+		});
+		this.conversation.messages.push(userMessage);
+		this.emit('structure');
+
+		// Get the model to evaluate the answer
+		await this.evaluateQuizAnswer(currentQuestion?.question ?? '', userAnswer);
+	}
+
+	/**
+	 * Evaluate the user's answer and generate feedback + next question.
+	 */
+	private async evaluateQuizAnswer(question: string, userAnswer: string): Promise<void> {
+		const settings = this.deps.getSettings();
+		const providerId = settings.defaultProvider;
+		const model = settings.providers[providerId].model;
+
+		const quizState = this.conversation.quizState!;
+		const questionIndex = quizState.currentQuestion - 1;
+		const currentQuestion = quizState.questions[questionIndex];
+
+		// Build evaluation prompt
+		const activeProfile = this.getProfileById(this.conversation.activeProfileId ?? 'general');
+		const systemPrompt = buildSystemPrompt({
+			mode: 'quiz',
+			customInstructions: settings.customInstructions,
+			responseLength: settings.responseLength,
+			profileInstructions: activeProfile?.instructions,
+		});
+
+		const evalPrompt = `The user answered: "${userAnswer}"
+
+The question was: "${question}"
+
+The correct answer (from context) is: "${currentQuestion?.answer ?? 'Not yet provided by model'}"
+
+Evaluate the user's answer fairly. Respond with:
+1. Grade: correct / mostly-correct / partially-correct / incorrect
+2. Brief explanation
+3. If quiz not complete, ask the next question`;
+
+		const history = toProviderMessages(this.conversation);
+
+		const assistant = createMessage('assistant', '', {
+			providerId,
+			model,
+			actionLabel: 'Quiz Evaluation',
+		});
+		this.conversation.messages.push(assistant);
+		this.deps.editTargets.remember(assistant.id, this.lastAnchorView);
+		this.generatingMessageId = assistant.id;
+		const controller = new AbortController();
+		this.abortController = controller;
+		this.emit('structure');
+
+		try {
+			const result = await this.deps.providers.complete({
+				providerId,
+				model,
+				system: systemPrompt,
+				messages: [...history, { role: 'user', content: evalPrompt }],
+				signal: controller.signal,
+				onText: (delta) => {
+					assistant.text += delta;
+					this.emit('stream');
+				},
+			});
+			if (!assistant.text) assistant.text = result.text;
+			if (result.model) assistant.model = result.model;
+			assistant.stopped = controller.signal.aborted;
+
+			// Parse the model's evaluation to extract grade
+			this.parseGradeFromResponse(assistant.text);
+			this.extractExplanation(assistant.text);
+
+			// Update quiz state with grade
+			this.conversation.quizState = recordAnswer(
+				this.conversation.quizState!,
+				questionIndex,
+				userAnswer,
+				currentQuestion?.answer ?? '',
+			);
+
+			// Check if quiz is complete
+			if (isQuizComplete(this.conversation.quizState, {
+				totalQuestions: quizState.totalQuestions,
+				difficulty: quizState.difficulty,
+				style: quizState.style,
+			})) {
+				this.conversation.quizState = endQuiz(this.conversation.quizState);
+				this.deps.store.touch(this.conversation);
+			} else {
+				// Generate next question
+				const attachments = quizState.contextAttachments;
+				let contextBlock = '';
+				if (attachments.length > 0) {
+					const { block } = await buildContextBlock(this.deps.app, attachments, {
+						maxCharsPerNote: settings.maxCharsPerNote,
+						maxContextChars: settings.maxContextChars,
+					});
+					contextBlock = block;
+				}
+				await this.generateQuizQuestion(contextBlock, {
+					totalQuestions: quizState.totalQuestions,
+					difficulty: quizState.difficulty,
+					style: quizState.style,
+				});
+			}
+
+			this.deps.store.touch(this.conversation);
+		} catch (error) {
+			this.applyFailure(assistant, error, settings);
+		} finally {
+			this.generatingMessageId = null;
+			this.abortController = null;
+			this.emit('structure');
+		}
+	}
+
+	/**
+	 * Parse grade from model response.
+	 */
+	private parseGradeFromResponse(text: string): 'correct' | 'mostly-correct' | 'partially-correct' | 'incorrect' {
+		const lower = text.toLowerCase();
+		if (lower.includes('correct') && !lower.includes('incorrect') && !lower.includes('partially') && !lower.includes('mostly')) {
+			return 'correct';
+		}
+		if (lower.includes('mostly-correct') || lower.includes('mostly correct')) {
+			return 'mostly-correct';
+		}
+		if (lower.includes('partially-correct') || lower.includes('partially correct')) {
+			return 'partially-correct';
+		}
+		return 'incorrect';
+	}
+
+	/**
+	 * Extract explanation from model response.
+	 */
+	private extractExplanation(text: string): string {
+		// Simple extraction - get text after grade
+		const lines = text.split('\n');
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (!line) continue;
+			const lower = line.toLowerCase();
+			if (lower.includes('grade:') || lower.includes('explanation:')) {
+				return lines.slice(i + 1).join('\n').trim();
+			}
+		}
+		return text;
+	}
+
+	/**
+	 * End the current quiz early.
+	 */
+	endQuiz(): void {
+		if (this.conversation.quizState?.active) {
+			this.conversation.quizState = endQuiz(this.conversation.quizState);
+			this.deps.store.touch(this.conversation);
+			this.emit('structure');
+		}
+	}
+
+	// --- conversation branching ---------------------------------------------
+
+	/**
+	 * Create a new conversation branched from the current one at a specific message.
+	 */
+	branchFromMessage(messageId: string): void {
+		const branch = createBranch(this.conversation, messageId);
+		this.conversation = branch;
+		this.deps.store.touch(this.conversation);
+		this.emit('conversation');
+	}
+
 	// --- generation ---------------------------------------------------------
 
 	stop(): void {
@@ -272,11 +594,13 @@ export class ChatController {
 		this.abortController = controller;
 		this.emit('structure');
 
+		const activeProfile = this.getProfileById(this.conversation.activeProfileId ?? 'general');
 		const systemPrompt = buildSystemPrompt({
 			mode: this.conversation.mode,
 			customInstructions: settings.customInstructions,
 			actionInstructions: extra.actionInstructions,
 			responseLength: settings.responseLength,
+			profileInstructions: activeProfile?.instructions,
 		});
 
 		try {
