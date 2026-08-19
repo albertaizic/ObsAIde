@@ -1,4 +1,4 @@
-import { Notice, PluginSettingTab, Setting, setIcon, type App } from 'obsidian';
+import { Modal, Notice, PluginSettingTab, Setting, setIcon, type App } from 'obsidian';
 import { ASSISTANT_NAME } from '../constants';
 import type ObsAidePlugin from '../main';
 import { getProviderDescriptor, listProviderDescriptors } from '../providers/catalog';
@@ -11,6 +11,9 @@ import {
 	TEMPERATURE_RANGE,
 	isProviderConfigured,
 	providerLabel,
+	type CustomAction,
+	type CustomActionContextMode,
+	type CustomActionOutputMode,
 } from './types';
 
 /** The ObsAIde settings tab. */
@@ -30,6 +33,8 @@ export class ObsAideSettingTab extends PluginSettingTab {
 		containerEl.addClass('obsaide-settings');
 
 		this.renderGeneral(containerEl);
+		this.renderResponseLength(containerEl);
+		this.renderCustomActions(containerEl);
 		this.renderProviders(containerEl);
 		this.renderContext(containerEl);
 		this.renderPrivacy(containerEl);
@@ -426,8 +431,238 @@ export class ObsAideSettingTab extends PluginSettingTab {
 					}),
 			);
 	}
+
+	// --- response length -----------------------------------------------------
+
+	private renderResponseLength(container: HTMLElement): void {
+		const settings = this.plugin.settings;
+		new Setting(container).setName('Response length').setHeading();
+
+		container.createEl('p', {
+			cls: 'setting-item-description obsaide-settings-note',
+			text: 'Controls how much detail Aide includes in its answers. This is a prompt-level instruction, not a hard token limit.',
+		});
+
+		new Setting(container)
+			.setName('Default response length')
+			.setDesc('Short = concise, direct answers. Normal = balanced. Detailed = more explanation and examples.')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption('short', 'Short')
+					.addOption('normal', 'Normal')
+					.addOption('detailed', 'Detailed')
+					.setValue(settings.responseLength)
+					.onChange(async (value) => {
+						settings.responseLength = value as 'short' | 'normal' | 'detailed';
+						await this.save();
+					});
+			});
+	}
+
+	// --- custom actions ------------------------------------------------------
+
+	private renderCustomActions(container: HTMLElement): void {
+		const settings = this.plugin.settings;
+		new Setting(container).setName('Custom actions').setHeading();
+
+		container.createEl('p', {
+			cls: 'setting-item-description obsaide-settings-note',
+			text: 'Create reusable AI actions that appear in the editor context menu and inline selection menu. Built-in actions cannot be deleted.',
+		});
+
+		// Add action button
+		new Setting(container)
+			.setName('Add custom action')
+			.addButton((button) =>
+				button
+					.setButtonText('Create new action')
+					.setCta()
+					.onClick(() => this.openCustomActionModal(null)),
+			);
+
+		// List existing custom actions
+		if (settings.customActions.length === 0) {
+			container.createEl('p', {
+				cls: 'setting-item-description',
+				text: 'No custom actions yet. Click "create new action" to add one.',
+			});
+			return;
+		}
+
+		const list = container.createDiv({ cls: 'obsaide-custom-actions-list' });
+		for (const action of settings.customActions) {
+			this.renderCustomActionItem(list, action);
+		}
+	}
+
+	private renderCustomActionItem(container: HTMLElement, action: CustomAction): void {
+		const item = container.createDiv({ cls: 'obsaide-custom-action-item' });
+
+		const info = item.createDiv({ cls: 'obsaide-custom-action-info' });
+		info.createDiv({ cls: 'obsaide-custom-action-name', text: action.name });
+		info.createDiv({
+			cls: 'obsaide-custom-action-meta',
+			text: `Context: ${action.contextMode} · Output: ${action.outputMode} · ${action.enabled ? 'Enabled' : 'Disabled'}`,
+		});
+
+		const actions = item.createDiv({ cls: 'obsaide-custom-action-buttons' });
+		actions.createEl('button', {
+			cls: 'obsaide-button is-small',
+			text: action.enabled ? 'Disable' : 'Enable',
+		}).addEventListener('click', () => {
+			action.enabled = !action.enabled;
+			void this.save().then(() => this.display());
+		});
+		actions.createEl('button', {
+			cls: 'obsaide-button is-small',
+			text: 'Edit',
+		}).addEventListener('click', () => this.openCustomActionModal(action));
+		actions.createEl('button', {
+			cls: 'obsaide-button is-small',
+			text: 'Delete',
+		}).addEventListener('click', () => {
+			const idx = this.plugin.settings.customActions.indexOf(action);
+			if (idx >= 0) {
+				this.plugin.settings.customActions.splice(idx, 1);
+				void this.save().then(() => this.display());
+			}
+		});
+	}
+
+	private openCustomActionModal(action: CustomAction | null): void {
+		const isEditing = action !== null;
+		const data = action ?? {
+			id: '',
+			name: '',
+			icon: 'zap',
+			instruction: '',
+			contextMode: 'smart' as CustomActionContextMode,
+			outputMode: 'answer' as CustomActionOutputMode,
+			enabled: true,
+		};
+
+		const modal = new CustomActionModal(this.app, data, isEditing, (result) => {
+			void (async () => {
+				if (isEditing) {
+					const idx = this.plugin.settings.customActions.findIndex((a) => a.id === action.id);
+					if (idx >= 0) this.plugin.settings.customActions[idx] = result;
+				} else {
+					result.id = `custom-${Date.now()}`;
+					this.plugin.settings.customActions.push(result);
+				}
+				await this.save();
+				this.display();
+			})();
+		});
+		modal.open();
+	}
 }
 
 function clamp(value: number): number {
 	return Math.min(CONTEXT_CHAR_RANGE.max, Math.max(CONTEXT_CHAR_RANGE.min, value));
+}
+
+/** Modal for creating/editing a custom action. */
+class CustomActionModal extends Modal {
+	private resolve: ((value: CustomAction) => void) | null = null;
+
+	constructor(
+		app: App,
+		private readonly initialData: Partial<CustomAction>,
+		private readonly isEditing: boolean,
+		onSubmit: (action: CustomAction) => void,
+	) {
+		super(app);
+		this.resolve = onSubmit;
+	}
+
+	override onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('obsaide-custom-action-modal');
+
+		const data = this.initialData as CustomAction;
+
+		new Setting(contentEl)
+			.setName('Action name')
+			.addText((text) =>
+				text
+					.setPlaceholder('E.g., make flashcards')
+					.setValue(data.name)
+					.onChange((value) => (data.name = value.trim())),
+			);
+
+		new Setting(contentEl)
+			.setName('Icon')
+			.setDesc('Obsidian icon name (e.g., zap, book-open, brain, pencil)')
+			.addText((text) =>
+				text
+					.setPlaceholder('Zap')
+					.setValue(data.icon || 'zap')
+					.onChange((value) => (data.icon = value.trim() || 'zap')),
+			);
+
+		new Setting(contentEl)
+			.setName('Instruction')
+			.setDesc('The prompt sent to the AI. Use clear, specific instructions.')
+			.addTextArea((textarea) => {
+				textarea
+					.setPlaceholder('Create flashcards from the selected text...')
+					.setValue(data.instruction)
+					.onChange((value) => (data.instruction = value.trim()));
+				textarea.inputEl.rows = 4;
+			});
+
+		new Setting(contentEl)
+			.setName('Context mode')
+			.setDesc('What context to include with the request.')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption('smart', 'Smart/default (selection + containing note)')
+					.addOption('selection', 'Selection only')
+					.addOption('section', 'Current Markdown section')
+					.addOption('note', 'Full current note')
+					.setValue(data.contextMode)
+					.onChange((value) => (data.contextMode = value as CustomActionContextMode));
+			});
+
+		new Setting(contentEl)
+			.setName('Output mode')
+			.setDesc('How to handle the AI response.')
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOption('answer', 'Answer (normal chat response)')
+					.addOption('note-ready', 'Note-ready (content only, no conversational wrapping)')
+					.addOption('rewrite', 'Rewrite/edit (uses review flow)')
+					.setValue(data.outputMode)
+					.onChange((value) => (data.outputMode = value as CustomActionOutputMode));
+			});
+
+		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
+		buttons.createEl('button', {
+			cls: 'obsaide-button',
+			text: this.isEditing ? 'Save' : 'Create',
+		}).addEventListener('click', () => {
+			if (!data.name.trim()) {
+				new Notice('Please enter a name');
+				return;
+			}
+			if (!data.instruction.trim()) {
+				new Notice('Please enter an instruction');
+				return;
+			}
+			this.resolve?.(data);
+			this.close();
+		});
+		buttons.createEl('button', {
+			cls: 'obsaide-button',
+			text: 'Cancel',
+		}).addEventListener('click', () => {
+			this.close();
+		});
+	}
+
+	override onClose(): void {
+		this.contentEl.empty();
+	}
 }

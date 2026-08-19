@@ -12,6 +12,33 @@ export interface ProviderSettings {
 	model: string;
 }
 
+/** Context mode for custom actions. */
+export type CustomActionContextMode = 'smart' | 'selection' | 'section' | 'note';
+
+/** Smart context scope selector options. */
+export type ContextScope = 'none' | 'selection' | 'section' | 'note' | 'linked' | 'folder';
+
+/** Output mode for custom actions. */
+export type CustomActionOutputMode = 'answer' | 'note-ready' | 'rewrite';
+
+/** A user-defined custom AI action. */
+export interface CustomAction {
+	/** Stable unique ID. */
+	id: string;
+	/** Display name. */
+	name: string;
+	/** Icon name (Obsidian icon). */
+	icon: string;
+	/** The instruction/prompt for the AI. */
+	instruction: string;
+	/** What context to include. */
+	contextMode: CustomActionContextMode;
+	/** How to handle the output. */
+	outputMode: CustomActionOutputMode;
+	/** Whether this action is enabled. */
+	enabled: boolean;
+}
+
 export interface ObsAideSettings {
 	schemaVersion: number;
 	defaultProvider: ProviderId;
@@ -32,6 +59,12 @@ export interface ObsAideSettings {
 	maxCharsPerNote: number;
 	/** Cap across all attachments in a single request. */
 	maxContextChars: number;
+	/** Response length preference. */
+	responseLength: 'short' | 'normal' | 'detailed';
+	/** User-defined custom actions. */
+	customActions: CustomAction[];
+	/** Default context scope for new conversations. */
+	contextScope: ContextScope;
 }
 
 /**
@@ -45,7 +78,7 @@ export const TEMPERATURE_RANGE = { min: 0, max: 1, step: 0.05 } as const;
 export const MAX_OUTPUT_TOKENS_RANGE = { min: 256, max: 16_000 } as const;
 export const CONTEXT_CHAR_RANGE = { min: 1_000, max: 200_000 } as const;
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 function defaultProviderSettings(id: ProviderId): ProviderSettings {
 	const descriptor = getProviderDescriptor(id);
@@ -76,6 +109,9 @@ export function createDefaultSettings(): ObsAideSettings {
 		persistConversations: true,
 		maxCharsPerNote: 16_000,
 		maxContextChars: 48_000,
+		responseLength: 'normal',
+		customActions: [],
+		contextScope: 'selection',
 	};
 }
 
@@ -173,6 +209,38 @@ export function normalizeSettings(raw: unknown): ObsAideSettings {
 				defaults.maxContextChars,
 			),
 		),
+		responseLength: (['short', 'normal', 'detailed'] as const).includes(
+			data['responseLength'] as 'short' | 'normal' | 'detailed',
+		)
+			? (data['responseLength'] as 'short' | 'normal' | 'detailed')
+			: defaults.responseLength,
+		customActions: Array.isArray(data['customActions'])
+			? data['customActions'].map((a: unknown) => {
+				const obj = a as Record<string, unknown>;
+				return {
+					id: asString(obj['id'], ''),
+					name: asString(obj['name'], ''),
+					icon: asString(obj['icon'], 'zap'),
+					instruction: asString(obj['instruction'], ''),
+					contextMode: (['smart', 'selection', 'section', 'note'] as const).includes(
+						obj['contextMode'] as CustomActionContextMode,
+					)
+						? (obj['contextMode'] as CustomActionContextMode)
+						: 'smart',
+					outputMode: (['answer', 'note-ready', 'rewrite'] as const).includes(
+						obj['outputMode'] as CustomActionOutputMode,
+					)
+						? (obj['outputMode'] as CustomActionOutputMode)
+						: 'answer',
+					enabled: asBoolean(obj['enabled'], true),
+				};
+			})
+			: defaults.customActions,
+		contextScope: (['none', 'selection', 'section', 'note', 'linked', 'folder'] as const).includes(
+			data['contextScope'] as ContextScope,
+		)
+			? (data['contextScope'] as ContextScope)
+			: defaults.contextScope,
 	};
 }
 
@@ -221,7 +289,9 @@ export function needsMigration(raw: unknown, normalized: ObsAideSettings): boole
 	if (data['schemaVersion'] !== SCHEMA_VERSION) return true;
 	return (
 		data['temperature'] !== normalized.temperature ||
-		data['maxOutputTokens'] !== normalized.maxOutputTokens
+		data['maxOutputTokens'] !== normalized.maxOutputTokens ||
+		data['responseLength'] !== normalized.responseLength ||
+		!Array.isArray(data['customActions'])
 	);
 }
 
