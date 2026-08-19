@@ -6,6 +6,9 @@ import { ASSISTANT_NAME } from '../constants';
  */
 export type AideMode = 'chat' | 'tutor';
 
+/** User-facing response length preference. */
+export type ResponseLength = 'short' | 'normal' | 'detailed';
+
 /**
  * The default persona.
  *
@@ -61,6 +64,8 @@ export interface SystemPromptOptions {
 	customInstructions?: string;
 	/** Extra instructions supplied by a note action. */
 	actionInstructions?: string;
+	/** Response length preference. */
+	responseLength?: ResponseLength;
 }
 
 export function buildSystemPrompt(options: SystemPromptOptions): string {
@@ -71,6 +76,19 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
 
 	const custom = options.customInstructions?.trim();
 	if (custom) sections.push(`The user added these standing instructions:\n${custom}`);
+
+	// Response length preference
+	const length = options.responseLength ?? 'normal';
+	if (length === 'short') {
+		sections.push(
+			'Response length: SHORT. Give concise, direct answers. A few sentences at most. No unnecessary headings or structure unless the question demands it. Still be complete and correct.',
+		);
+	} else if (length === 'detailed') {
+		sections.push(
+			'Response length: DETAILED. Provide fuller explanations, examples, and relevant detail. Use structure (headings, bullets) when helpful. No filler — every sentence should add value.',
+		);
+	}
+	// 'normal' uses the base prompt's default behavior
 
 	return sections.join('\n\n');
 }

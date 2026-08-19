@@ -104,6 +104,16 @@ export class ChatController {
 		return settings.providers[settings.defaultProvider].model;
 	}
 
+	/** Expose settings for the view. */
+	getSettings(): ObsAideSettings {
+		return this.deps.getSettings();
+	}
+
+	/** Save settings through the plugin. */
+	saveSettings(): Promise<void> {
+		return this.deps.saveSettings();
+	}
+
 	onChange(listener: (reason: ChatChangeReason) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
@@ -266,6 +276,7 @@ export class ChatController {
 			mode: this.conversation.mode,
 			customInstructions: settings.customInstructions,
 			actionInstructions: extra.actionInstructions,
+			responseLength: settings.responseLength,
 		});
 
 		try {
