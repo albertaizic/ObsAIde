@@ -1,5 +1,5 @@
 import { Notice, type TFile } from 'obsidian';
-import { captureNote, captureSelection, getEditorTarget } from '../context/collect';
+import { captureNote, captureSelection, getEditorTarget, captureSection } from '../context/collect';
 import type { Attachment } from '../context/types';
 import type ObsAidePlugin from '../main';
 import { PromptModal } from '../ui/prompt-modal';
@@ -9,6 +9,7 @@ import type { NoteEditAnchor } from './anchor';
 import { captureAnchor, captureWholeNoteAnchor } from './edit-target';
 import type { AideAction } from './registry';
 import type { EditorTarget } from '../context/collect';
+import type { CustomAction } from '../settings/types';
 
 interface ActionScope {
 	attachments: Attachment[];
@@ -119,5 +120,86 @@ export async function runAction(
 		anchor: scope.anchor ?? undefined,
 		replacesAnchor: action.mutates,
 		anchorView: target.view,
+	});
+}
+
+/** Run a custom action and stream the result into the Aide sidebar. */
+export async function runCustomAction(
+	plugin: ObsAidePlugin,
+	customAction: CustomAction,
+): Promise<void> {
+	const target = getEditorTarget(plugin.app);
+	if (!target) {
+		new Notice('Open a note in the editor first.');
+		return;
+	}
+
+	const { editor, file, view } = target;
+
+	// Build attachments based on context mode
+	let attachments: Attachment[] = [];
+	let anchor: NoteEditAnchor | null = null;
+
+	if (customAction.contextMode === 'selection') {
+		const selection = captureSelection(editor, file, 'primary');
+		if (selection) {
+			attachments.push(selection);
+			if (file) attachments.push(captureNote(file, 'supporting'));
+			anchor = captureAnchor(view);
+		} else if (file) {
+			attachments.push(captureNote(file, 'primary'));
+			anchor = captureAnchor(view);
+		}
+	} else if (customAction.contextMode === 'section') {
+		const sectionAttach = captureSection(plugin.app, editor, file, 'primary');
+		if (sectionAttach) {
+			attachments.push(sectionAttach as unknown as Attachment);
+			anchor = captureAnchor(view);
+		} else if (file) {
+			attachments.push(captureNote(file, 'primary'));
+			anchor = captureAnchor(view);
+		}
+	} else if (customAction.contextMode === 'note' && file) {
+		attachments.push(captureNote(file, 'primary'));
+		anchor = captureAnchor(view);
+	} else {
+		// Smart/default: same as selection
+		const selection = captureSelection(editor, file, 'primary');
+		if (selection) {
+			attachments.push(selection);
+			if (file) attachments.push(captureNote(file, 'supporting'));
+			anchor = captureAnchor(view);
+		} else if (file) {
+			attachments.push(captureNote(file, 'primary'));
+			anchor = captureAnchor(view);
+		}
+	}
+
+	if (attachments.length === 0) {
+		new Notice('Select some text, or open a note with content.');
+		return;
+	}
+
+	// Build prompt from custom action instruction
+	const prompt = customAction.instruction;
+
+	const chatView = await plugin.activateChatView();
+	if (!chatView) {
+		new Notice('Could not open Aide.');
+		return;
+	}
+
+	// Determine if this is a rewrite action
+	const isRewrite = customAction.outputMode === 'rewrite';
+
+	await chatView.send({
+		displayText: customAction.name,
+		prompt: prompt,
+		actionLabel: customAction.name,
+		actionInstructions: '', // Custom actions don't have separate system instructions
+		attachments,
+		anchor: anchor ?? undefined,
+		replacesAnchor: isRewrite,
+		anchorView: view,
 	});
 }
