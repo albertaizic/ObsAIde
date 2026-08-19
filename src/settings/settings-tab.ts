@@ -5,6 +5,7 @@ import { getProviderDescriptor, listProviderDescriptors } from '../providers/cat
 import { AideError } from '../providers/errors';
 import type { ProviderId } from '../providers/types';
 import { ModelPickerModal } from '../ui/model-picker';
+import { summarize } from '../utils/text';
 import {
 	CONTEXT_CHAR_RANGE,
 	MAX_OUTPUT_TOKENS_RANGE,
@@ -482,9 +483,11 @@ export class ObsAideSettingTab extends PluginSettingTab {
 
 		// List existing custom actions
 		if (settings.customActions.length === 0) {
-			container.createEl('p', {
+			const empty = container.createDiv({ cls: 'obsaide-custom-actions-empty' });
+			setIcon(empty.createDiv({ cls: 'obsaide-custom-actions-empty-icon' }), 'zap');
+			empty.createEl('p', {
 				cls: 'setting-item-description',
-				text: 'No custom actions yet. Click "create new action" to add one.',
+				text: 'No custom actions yet. Create one to add it to the Aide selection menu, the actions picker, and the sidebar.',
 			});
 			return;
 		}
@@ -495,38 +498,73 @@ export class ObsAideSettingTab extends PluginSettingTab {
 		}
 	}
 
+	private static readonly CONTEXT_MODE_LABELS: Record<CustomActionContextMode, string> = {
+		smart: 'Smart context',
+		selection: 'Selection',
+		section: 'Section',
+		note: 'Full note',
+	};
+
+	private static readonly OUTPUT_MODE_LABELS: Record<CustomActionOutputMode, string> = {
+		answer: 'Answer',
+		'note-ready': 'Note-ready',
+		rewrite: 'Rewrite',
+	};
+
 	private renderCustomActionItem(container: HTMLElement, action: CustomAction): void {
-		const item = container.createDiv({ cls: 'obsaide-custom-action-item' });
+		const card = container.createDiv({ cls: 'obsaide-custom-action-card' });
+		card.toggleClass('is-disabled', !action.enabled);
 
-		const info = item.createDiv({ cls: 'obsaide-custom-action-info' });
-		info.createDiv({ cls: 'obsaide-custom-action-name', text: action.name });
-		info.createDiv({
-			cls: 'obsaide-custom-action-meta',
-			text: `Context: ${action.contextMode} · Output: ${action.outputMode} · ${action.enabled ? 'Enabled' : 'Disabled'}`,
+		const header = card.createDiv({ cls: 'obsaide-custom-action-header' });
+		const titleRow = header.createDiv({ cls: 'obsaide-custom-action-title-row' });
+		setIcon(titleRow.createSpan({ cls: 'obsaide-custom-action-icon' }), action.icon || 'zap');
+		titleRow.createSpan({ cls: 'obsaide-custom-action-title', text: action.name });
+		header.createSpan({
+			cls: `obsaide-custom-action-status ${action.enabled ? 'is-enabled' : ''}`,
+			text: action.enabled ? 'Enabled' : 'Disabled',
 		});
 
-		const actions = item.createDiv({ cls: 'obsaide-custom-action-buttons' });
-		actions.createEl('button', {
-			cls: 'obsaide-button is-small',
-			text: action.enabled ? 'Disable' : 'Enable',
-		}).addEventListener('click', () => {
-			action.enabled = !action.enabled;
-			void this.save().then(() => this.display());
+		const badges = card.createDiv({ cls: 'obsaide-custom-action-badges' });
+		badges.createSpan({
+			cls: 'obsaide-custom-action-badge',
+			text: ObsAideSettingTab.CONTEXT_MODE_LABELS[action.contextMode],
 		});
-		actions.createEl('button', {
-			cls: 'obsaide-button is-small',
-			text: 'Edit',
-		}).addEventListener('click', () => this.openCustomActionModal(action));
-		actions.createEl('button', {
-			cls: 'obsaide-button is-small',
-			text: 'Delete',
-		}).addEventListener('click', () => {
-			const idx = this.plugin.settings.customActions.indexOf(action);
-			if (idx >= 0) {
-				this.plugin.settings.customActions.splice(idx, 1);
+		badges.createSpan({
+			cls: 'obsaide-custom-action-badge',
+			text: ObsAideSettingTab.OUTPUT_MODE_LABELS[action.outputMode],
+		});
+
+		if (action.instruction.trim()) {
+			card.createDiv({
+				cls: 'obsaide-custom-action-preview',
+				text: summarize(action.instruction.trim(), 140),
+			});
+		}
+
+		const footer = card.createDiv({ cls: 'obsaide-custom-action-footer' });
+		footer
+			.createEl('button', { cls: 'obsaide-button is-small', text: 'Edit' })
+			.addEventListener('click', () => this.openCustomActionModal(action));
+		footer
+			.createEl('button', {
+				cls: 'obsaide-button is-small',
+				text: action.enabled ? 'Disable' : 'Enable',
+			})
+			.addEventListener('click', () => {
+				action.enabled = !action.enabled;
 				void this.save().then(() => this.display());
-			}
-		});
+			});
+		footer
+			.createEl('button', { cls: 'obsaide-button is-small is-danger', text: 'Delete' })
+			.addEventListener('click', () => {
+				new ConfirmDeleteModal(this.app, action.name, () => {
+					const idx = this.plugin.settings.customActions.indexOf(action);
+					if (idx >= 0) {
+						this.plugin.settings.customActions.splice(idx, 1);
+						void this.save().then(() => this.display());
+					}
+				}).open();
+			});
 	}
 
 	private openCustomActionModal(action: CustomAction | null): void {
@@ -660,6 +698,40 @@ class CustomActionModal extends Modal {
 		}).addEventListener('click', () => {
 			this.close();
 		});
+	}
+
+	override onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
+/** Confirms before a custom action is permanently removed. */
+class ConfirmDeleteModal extends Modal {
+	constructor(
+		app: App,
+		private readonly actionName: string,
+		private readonly onConfirm: () => void,
+	) {
+		super(app);
+	}
+
+	override onOpen(): void {
+		const { contentEl } = this;
+		this.setTitle('Delete custom action');
+		contentEl.createEl('p', {
+			cls: 'obsaide-modal-description',
+			text: `“${this.actionName}” will be permanently deleted. This cannot be undone.`,
+		});
+		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
+		buttons
+			.createEl('button', { cls: 'obsaide-button', text: 'Cancel' })
+			.addEventListener('click', () => this.close());
+		buttons
+			.createEl('button', { cls: 'obsaide-button is-danger', text: 'Delete' })
+			.addEventListener('click', () => {
+				this.close();
+				this.onConfirm();
+			});
 	}
 
 	override onClose(): void {

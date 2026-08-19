@@ -4,9 +4,11 @@ import {
 	Notice,
 	setIcon,
 	setTooltip,
+	type Editor,
 	type MarkdownView,
 	type WorkspaceLeaf,
 	TFile,
+	TFolder,
 } from 'obsidian';
 import { AIDE_ICON, ASSISTANT_NAME, CHAT_VIEW_TYPE } from '../constants';
 import type { NoteEditAnchor } from '../actions/anchor';
@@ -16,8 +18,11 @@ import {
 	resolveEditTarget,
 	type ResolvedEditTarget,
 } from '../actions/edit-target';
+import { AIDE_ACTIONS } from '../actions/registry';
+import { describeCustomActionAvailability, runAction, runCustomAction } from '../actions/runner';
 import type { ChatController, SendRequest } from '../chat/controller';
 import { isEmptyConversation, type Conversation, type ConversationMessage } from '../chat/conversation';
+import { buildConversationExportContent, sanitizeExportName, type ConversationExportMode as ExportMode } from '../chat/export';
 import {
 	captureFolder,
 	captureNote,
@@ -26,15 +31,21 @@ import {
 	getEditorTarget,
 	isDuplicateAttachment,
 } from '../context/collect';
+import { resolveLinkedNotes } from '../context/linked-notes-vault';
+import type { LinkedNoteCandidate } from '../context/linked-notes';
+import { extractCurrentSection } from '../context/section';
+import { describeScopeStatus } from '../context/status';
 import type { Attachment } from '../context/types';
 import { getProviderDescriptor } from '../providers/catalog';
 import { isProviderConfigured, type ContextScope } from '../settings/types';
 import { summarize } from '../utils/text';
 import { AttachmentDetailsModal } from './attachment-details';
 import { Composer } from './composer';
+import { ConversationExportModal } from './export-modal';
 import { ConversationPickerModal } from './conversation-picker';
 import { EditPreviewModal } from './edit-preview';
 import { FolderPickerModal } from './folder-picker';
+import { LinkedNotesModal } from './linked-notes-modal';
 import { MessageList } from './message-list';
 import { ModelPickerModal } from './model-picker';
 import { NotePickerModal } from './note-picker';
@@ -63,6 +74,8 @@ export class AideChatView extends ItemView {
 	private unsubscribe: (() => void) | null = null;
 	private streamTimer: number | null = null;
 	private streamPending = false;
+	/** Last known editor context (editor, file, view, cursor) for section context when sidebar gains focus. */
+	private lastEditorContext: { editor: Editor; file: TFile | null; view: MarkdownView; cursor: { line: number; ch: number } } | null = null;
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -90,6 +103,9 @@ export class AideChatView extends ItemView {
 		root.empty();
 		root.addClass('obsaide-view');
 
+		// Capture the editor context before the sidebar takes focus
+		this.captureLastEditorContext();
+
 		this.buildHeader(root);
 		this.buildTranscript(root);
 
@@ -97,12 +113,17 @@ export class AideChatView extends ItemView {
 			onSend: (text) => void this.send({ displayText: text }),
 			onStop: () => this.controller.stop(),
 			onAddContext: (anchor) => this.showContextMenu(anchor),
+			onOpenActions: (anchor) => this.showActionsMenu(anchor),
 			onRemoveAttachment: (id) => {
 				this.attachments = this.attachments.filter((item) => item.id !== id);
 				this.composer.setAttachments(this.attachments);
 			},
 			onInspectAttachment: (attachment) => this.inspect(attachment),
-			onAddNoteAttachment: (attachment) => this.addAttachment(attachment),
+			onAddNoteAttachment: (attachment) => {
+				this.addAttachment(attachment);
+				const file = this.app.vault.getAbstractFileByPath(attachment.path);
+				if (file instanceof TFile) this.maybeOfferLinkedNotes([file]);
+			},
 		}, this.app);
 
 		this.unsubscribe = this.controller.onChange((reason) => {
@@ -116,7 +137,25 @@ export class AideChatView extends ItemView {
 			void this.renderAll();
 		});
 
+		// Re-capture editor context when sidebar regains focus
+		this.contentEl.addEventListener('focusin', () => this.captureLastEditorContext());
+
 		await this.renderAll();
+	}
+
+	/** Capture the current editor context (editor, file, view, cursor) for section context. */
+	private captureLastEditorContext(): void {
+		const target = getEditorTarget(this.app);
+		if (target) {
+			this.lastEditorContext = {
+				editor: target.editor,
+				file: target.file,
+				view: target.view,
+				cursor: target.editor.getCursor('from'),
+			};
+		}
+		// The header does not exist yet during the initial capture in onOpen().
+		if (this.scopeButton) this.updateScopeButton();
 	}
 
 	override async onClose(): Promise<void> {
@@ -457,16 +496,55 @@ export class AideChatView extends ItemView {
 	private updateScopeButton(): void {
 		const settings = this.controller.getSettings();
 		const scope = settings.contextScope ?? 'selection';
-		const labels: Record<string, string> = {
-			none: 'None',
-			selection: 'Selection',
-			section: 'Section',
-			note: 'Note',
-			linked: 'Linked notes',
-			folder: 'Folder',
-		};
-		this.scopeButton.setText(labels[scope] ?? 'Selection');
-		setTooltip(this.scopeButton, `Context scope: ${labels[scope]}. Click to change.`);
+		const status = this.computeScopeStatusText(scope);
+		this.scopeButton.setText(status);
+		setTooltip(this.scopeButton, `${status}. Click to change the context scope.`);
+	}
+
+	/**
+	 * What this scope will actually send, right now — never an ambiguous label.
+	 * Selection with nothing selected must read as empty, not silently swap in
+	 * unrelated context; Section must reflect the last known editor cursor, not
+	 * fall back to the whole note.
+	 */
+	private computeScopeStatusText(scope: ContextScope): string {
+		const target = getEditorTarget(this.app);
+		const editorContext = this.lastEditorContext;
+		const editor = target?.editor ?? editorContext?.editor ?? null;
+		const file = target?.file ?? editorContext?.file ?? null;
+		const hasEditor = editor !== null && file !== null;
+
+		const hasSelection = editor !== null && editor.getSelection().trim().length > 0;
+
+		let sectionBreadcrumb: string | null = null;
+		if (editor && file) {
+			const result = extractCurrentSection(this.app, editor, file);
+			sectionBreadcrumb = result.section ? result.breadcrumb : null;
+		}
+
+		const attachedNotePaths = this.attachments
+			.filter((a) => a.kind === 'note' && a.path)
+			.map((a) => a.path!);
+		const linkSourcePaths = attachedNotePaths.length > 0 ? attachedNotePaths : file ? [file.path] : [];
+		const linkSourceFiles = linkSourcePaths
+			.map((path) => this.app.vault.getAbstractFileByPath(path))
+			.filter((f): f is TFile => f instanceof TFile);
+		const linkedCount =
+			linkSourceFiles.length > 0
+				? resolveLinkedNotes(this.app, linkSourceFiles, this.attachedPaths()).length
+				: 0;
+
+		const folderPath = this.attachments.find((a) => a.kind === 'folder')?.path ?? null;
+
+		return describeScopeStatus({
+			scope,
+			hasEditor,
+			hasSelection,
+			activeFileName: file?.basename ?? null,
+			sectionBreadcrumb,
+			linkedCount,
+			folderPath,
+		});
 	}
 
 	private async applyScopeContext(): Promise<void> {
@@ -491,52 +569,88 @@ export class AideChatView extends ItemView {
 		}
 
 		if (scope === 'selection') {
+			// Nothing selected means nothing is sent for this scope — never swap
+			// in the whole note as an unrequested substitute.
 			const selection = captureSelection(target.editor, target.file, 'primary');
 			if (selection) {
 				this.addAttachment(selection);
 				if (target.file) {
 					this.addAttachment(captureNote(target.file, 'supporting'));
 				}
-			} else if (target.file) {
-				this.addAttachment(captureNote(target.file, 'primary'));
 			}
 		} else if (scope === 'section') {
-			const sectionAttach = captureSection(this.app, target.editor, target.file, 'primary');
-			if (sectionAttach) this.addAttachment(sectionAttach as unknown as Attachment);
+			// Use preserved editor context if available (captured before sidebar took focus)
+			const editorContext = this.lastEditorContext;
+			const editor = editorContext?.editor ?? target.editor;
+			const file = editorContext?.file ?? target.file;
+			const sectionAttach = captureSection(this.app, editor, file, 'primary');
+			if (sectionAttach) this.addAttachment(sectionAttach);
 		} else if (scope === 'note' && target.file) {
 			this.addAttachment(captureNote(target.file, 'primary'));
 		} else if (scope === 'linked' && target.file) {
 			await this.addLinkedNotes(target.file);
 		} else if (scope === 'folder') {
-			// Folder picker would need to be opened - for now just notify
-			new Notice('Select a folder from the context menu');
-		}
-
-		this.composer.setAttachments(this.attachments);
-	}
-
-	private async addLinkedNotes(file: TFile): Promise<void> {
-		const cache = this.app.metadataCache.getFileCache(file);
-		if (!cache?.links) return;
-
-		const linkedFiles: TFile[] = [];
-		for (const link of cache.links) {
-			const linkedFile = this.app.metadataCache.getFirstLinkpathDest(link.link, file.path);
-			if (linkedFile instanceof TFile && linkedFile.extension === 'md') {
-				linkedFiles.push(linkedFile);
+			// A folder attachment from a prior selection is kept (see the
+			// `manualAttachments` filter above); otherwise there is nothing to
+			// send until the user picks one.
+			const hasFolder = this.attachments.some((a) => a.kind === 'folder');
+			if (!hasFolder) {
+				new FolderPickerModal(this.app, (folder) => {
+					this.addAttachment(captureFolder(this.app, folder));
+					this.composer.setAttachments(this.attachments);
+					this.updateScopeButton();
+				}).open();
 			}
 		}
 
-		if (linkedFiles.length === 0) {
-			new Notice('No linked Markdown notes found');
-			return;
-		}
+		this.composer.setAttachments(this.attachments);
+		this.updateScopeButton();
+	}
 
-		// Show picker for linked notes
-		new NotePickerModal(this.app, (selectedFile) => {
-			this.addAttachment(captureNote(selectedFile, 'primary'));
+	/** Vault paths already covered by the current attachments, so a linked-note offer never repeats them. */
+	private attachedPaths(): Set<string> {
+		return new Set(this.attachments.map((a) => a.path).filter((p): p is string => !!p));
+	}
+
+	/**
+	 * Offer any Markdown notes the given note(s) link to, letting the user pick
+	 * which ones to attach. A no-op when there are none — never opens an empty
+	 * modal. Called once per attach; the notes a user picks here are added
+	 * directly and never re-offer their own links, so discovery stays one
+	 * level deep.
+	 */
+	private maybeOfferLinkedNotes(sourceFiles: TFile[]): void {
+		const candidates = resolveLinkedNotes(this.app, sourceFiles, this.attachedPaths());
+		if (candidates.length === 0) return;
+		this.openLinkedNotesModal(candidates);
+	}
+
+	private openLinkedNotesModal(candidates: LinkedNoteCandidate[]): void {
+		new LinkedNotesModal(this.app, candidates, (chosen) => {
+			for (const candidate of chosen) {
+				const file = this.app.vault.getAbstractFileByPath(candidate.path);
+				if (file instanceof TFile) this.addAttachment(captureNote(file, 'primary'));
+			}
 			this.composer.setAttachments(this.attachments);
 		}).open();
+	}
+
+	/** The "Linked notes" scope: union the outgoing links of every attached note. */
+	private async addLinkedNotes(fallbackFile: TFile): Promise<void> {
+		const attachedNotePaths = this.attachments
+			.filter((a) => a.kind === 'note' && a.path)
+			.map((a) => a.path!);
+		const sourcePaths = attachedNotePaths.length > 0 ? attachedNotePaths : [fallbackFile.path];
+		const sourceFiles = sourcePaths
+			.map((path) => this.app.vault.getAbstractFileByPath(path))
+			.filter((file): file is TFile => file instanceof TFile);
+
+		const candidates = resolveLinkedNotes(this.app, sourceFiles, this.attachedPaths());
+		if (candidates.length === 0) {
+			new Notice('No linked notes found');
+			return;
+		}
+		this.openLinkedNotesModal(candidates);
 	}
 
 	private showOverflowMenu(event: MouseEvent): void {
@@ -606,88 +720,40 @@ export class AideChatView extends ItemView {
 		).open();
 	}
 
-	/** Export the current conversation as a Markdown note. */
+	/**
+	 * Export the current conversation as a Markdown note.
+	 *
+	 * Name, folder and what to include are all decided in one modal before
+	 * "Export" is pressed — there is no follow-up question after that.
+	 */
 	private exportConversation(conversation: Conversation): void {
-		new PromptModal(this.app, {
-			title: 'Export conversation',
-			description: 'Choose export format and note name',
-			placeholder: conversation.title || 'Conversation Export',
-			submitText: 'Export',
-			onSubmit: (name) => {
-				const trimmed = name.trim();
-				if (!trimmed) {
-					new Notice('Please enter a note name.');
-					return;
-				}
-				// Show format picker
-				new Menu().addItem((item) =>
-					item
-						.setTitle('Full conversation (with questions)')
-						.setIcon('file-text')
-						.onClick(() => this.writeConversationNote(conversation, trimmed, 'full')),
-				).addItem((item) =>
-					item
-						.setTitle('Answers only')
-						.setIcon('list')
-						.onClick(() => this.writeConversationNote(conversation, trimmed, 'answers')),
-				).showAtMouseEvent({ clientX: 0, clientY: 0 } as MouseEvent);
-			},
+		const defaultFolder = this.app.workspace.getActiveFile()?.parent ?? this.app.vault.getRoot();
+		new ConversationExportModal(this.app, {
+			defaultName: conversation.title || 'Conversation Export',
+			defaultFolder: defaultFolder.path,
+			onExport: ({ name, folder, mode }) => this.writeConversationNote(conversation, name, folder, mode),
 		}).open();
 	}
 
 	private writeConversationNote(
 		conversation: Conversation,
 		name: string,
-		format: 'full' | 'answers',
+		folderPath: string,
+		mode: ExportMode,
 	): void {
-		const sanitized = name.replace(/[<>:"/\\|?*]/g, '-');
-		const folder = this.app.workspace.getActiveFile()?.parent ?? this.app.vault.getRoot();
-		let path = `${folder.path}/${sanitized}.md`;
+		const sanitized = sanitizeExportName(name);
+		const resolvedFolder = folderPath.trim()
+			? this.app.vault.getAbstractFileByPath(folderPath.trim())
+			: null;
+		const folder = resolvedFolder instanceof TFolder ? resolvedFolder : this.app.vault.getRoot();
 		let counter = 1;
-		let finalPath = path;
+		let finalPath = `${folder.path}/${sanitized}.md`;
 		while (this.app.vault.getAbstractFileByPath(finalPath)) {
 			finalPath = `${folder.path}/${sanitized} ${counter}.md`;
 			counter++;
 		}
 
-		const lines: string[] = [
-			'---',
-			`created: ${new Date().toISOString().split('T')[0]}`,
-			'source: ObsAIde',
-			'---',
-			'',
-			`# ${sanitized}`,
-			'',
-		];
-
-		if (format === 'full') {
-			for (const message of conversation.messages) {
-				if (message.role === 'user') {
-					const prefix = message.actionLabel ? `${message.actionLabel}: ` : '';
-					lines.push(`## You`);
-					lines.push('');
-					lines.push(`${prefix}${message.text}`);
-					lines.push('');
-				} else if (message.role === 'assistant' && message.text.trim() && !message.error) {
-					lines.push(`## ${ASSISTANT_NAME}`);
-					lines.push('');
-					lines.push(message.text);
-					lines.push('');
-				}
-			}
-		} else {
-			// Answers only
-			for (const message of conversation.messages) {
-				if (message.role === 'assistant' && message.text.trim() && !message.error) {
-					lines.push(message.text);
-					lines.push('');
-					lines.push('---');
-					lines.push('');
-				}
-			}
-		}
-
-		const content = lines.join('\n');
+		const content = buildConversationExportContent(conversation, sanitized, mode);
 
 		void this.app.vault.create(finalPath, content).then(async (file) => {
 			new Notice(`Exported to ${file.basename}`);
@@ -725,7 +791,9 @@ export class AideChatView extends ItemView {
 				.setIcon('file-text')
 				.setDisabled(!activeFile)
 				.onClick(() => {
-					if (activeFile) this.addAttachment(captureNote(activeFile));
+					if (!activeFile) return;
+					this.addAttachment(captureNote(activeFile));
+					this.maybeOfferLinkedNotes([activeFile]);
 				}),
 		);
 		menu.addItem((item) =>
@@ -733,9 +801,10 @@ export class AideChatView extends ItemView {
 				.setTitle('Choose a note…')
 				.setIcon('search')
 				.onClick(() => {
-					new NotePickerModal(this.app, (file) =>
-						this.addAttachment(captureNote(file)),
-					).open();
+					new NotePickerModal(this.app, (file) => {
+						this.addAttachment(captureNote(file));
+						this.maybeOfferLinkedNotes([file]);
+					}).open();
 				}),
 		);
 		menu.addItem((item) =>
@@ -759,6 +828,42 @@ export class AideChatView extends ItemView {
 						this.composer.setAttachments(this.attachments);
 					}),
 			);
+		}
+
+		const rect = anchor.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+	}
+
+	/** Run a built-in or custom action from the composer, without needing the editor context menu. */
+	private showActionsMenu(anchor: HTMLElement): void {
+		const menu = new Menu();
+
+		menu.addItem((item) => item.setTitle('Built-in').setDisabled(true));
+		for (const action of AIDE_ACTIONS) {
+			menu.addItem((item) =>
+				item
+					.setTitle(action.label)
+					.setIcon(action.icon)
+					.onClick(() => void runAction(this.plugin, action)),
+			);
+		}
+
+		const customActions = this.plugin.settings.customActions.filter((a) => a.enabled);
+		if (customActions.length > 0) {
+			menu.addSeparator();
+			menu.addItem((item) => item.setTitle('Custom').setDisabled(true));
+			for (const action of customActions) {
+				const availability = describeCustomActionAvailability(this.plugin, action);
+				menu.addItem((item) =>
+					item
+						.setTitle(
+							availability.available ? action.name : `${action.name} — ${availability.reason}`,
+						)
+						.setIcon(action.icon || 'zap')
+						.setDisabled(!availability.available)
+						.onClick(() => void runCustomAction(this.plugin, action)),
+				);
+			}
 		}
 
 		const rect = anchor.getBoundingClientRect();
@@ -822,6 +927,7 @@ export class AideChatView extends ItemView {
 		setTooltip(this.modelButton, `Model: ${model}. Select to change.`);
 
 		this.updateLengthButton();
+		this.updateScopeButton();
 
 		this.modeBadge.toggleClass('is-visible', this.controller.current.mode === 'tutor');
 	}

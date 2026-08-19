@@ -1,4 +1,5 @@
 import { Notice, type TFile } from 'obsidian';
+import { computeCustomActionAvailability, type CustomActionAvailability } from './availability';
 import { captureNote, captureSelection, getEditorTarget, captureSection } from '../context/collect';
 import type { Attachment } from '../context/types';
 import type ObsAidePlugin from '../main';
@@ -68,6 +69,32 @@ export function canRunActions(plugin: ObsAidePlugin): boolean {
 	return getEditorTarget(plugin.app) !== null;
 }
 
+/**
+ * Whether a custom action's declared context requirement is currently met,
+ * and if not, why — so callers can disable it with a reason instead of
+ * silently running on unrelated text. The decision itself lives in the
+ * Obsidian-free `computeCustomActionAvailability`; this only gathers the
+ * booleans from the live editor.
+ */
+export function describeCustomActionAvailability(
+	plugin: ObsAidePlugin,
+	action: CustomAction,
+): CustomActionAvailability {
+	const target = getEditorTarget(plugin.app);
+	if (!target) return { available: false, reason: 'Open a note first' };
+
+	const hasSelection = target.editor.getSelection().trim().length > 0;
+	const hasSection = captureSection(plugin.app, target.editor, target.file, 'primary') !== null;
+
+	return computeCustomActionAvailability({
+		contextMode: action.contextMode,
+		hasEditor: true,
+		hasSelection,
+		hasSection,
+		hasFile: target.file !== null,
+	});
+}
+
 /** Run a note action and stream the result into the Aide sidebar. */
 export async function runAction(
 	plugin: ObsAidePlugin,
@@ -134,6 +161,12 @@ export async function runCustomAction(
 		return;
 	}
 
+	const availability = describeCustomActionAvailability(plugin, customAction);
+	if (!availability.available) {
+		new Notice(`${customAction.name}: ${availability.reason}`);
+		return;
+	}
+
 	const { editor, file, view } = target;
 
 	// Build attachments based on context mode
@@ -153,7 +186,7 @@ export async function runCustomAction(
 	} else if (customAction.contextMode === 'section') {
 		const sectionAttach = captureSection(plugin.app, editor, file, 'primary');
 		if (sectionAttach) {
-			attachments.push(sectionAttach as unknown as Attachment);
+			attachments.push(sectionAttach);
 			anchor = captureAnchor(view);
 		} else if (file) {
 			attachments.push(captureNote(file, 'primary'));

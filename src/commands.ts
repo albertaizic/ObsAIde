@@ -1,7 +1,7 @@
 import { Notice, type Editor, type MarkdownFileInfo, type MarkdownView } from 'obsidian';
 import { captureAnchor } from './actions/edit-target';
 import { AIDE_ACTIONS } from './actions/registry';
-import { canRunActions, runAction } from './actions/runner';
+import { canRunActions, runAction, runCustomAction } from './actions/runner';
 import { ASSISTANT_NAME } from './constants';
 import {
 	captureAskContext,
@@ -11,7 +11,7 @@ import {
 } from './context/collect';
 import type { Attachment } from './context/types';
 import type ObsAidePlugin from './main';
-import { ActionPickerModal } from './ui/action-picker';
+import { ActionPickerModal, isCustomAction } from './ui/action-picker';
 import { AskAideModal } from './ui/ask-modal';
 
 /** Open Ask Aide with whatever the user is currently looking at. */
@@ -103,8 +103,10 @@ export function registerEditorMenu(plugin: ObsAidePlugin): void {
 						.setTitle(`${ASSISTANT_NAME} actions…`)
 						.setIcon('wand-sparkles')
 						.onClick(() => {
-							new ActionPickerModal(plugin.app, (action) =>
-								void runAction(plugin, action),
+							new ActionPickerModal(plugin.app, plugin, (action) =>
+								isCustomAction(action)
+									? void runCustomAction(plugin, action)
+									: void runAction(plugin, action),
 							).open();
 						}),
 				);

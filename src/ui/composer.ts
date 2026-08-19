@@ -9,6 +9,8 @@ export interface ComposerCallbacks {
 	onStop: () => void;
 	/** Anchor for the "add context" menu. */
 	onAddContext: (anchor: HTMLElement) => void;
+	/** Anchor for the built-in + custom actions menu. */
+	onOpenActions: (anchor: HTMLElement) => void;
 	onRemoveAttachment: (id: string) => void;
 	/** Show which notes a folder attachment covers. */
 	onInspectAttachment: (attachment: Attachment) => void;
@@ -24,6 +26,7 @@ export class Composer {
 	private readonly textarea: HTMLTextAreaElement;
 	private readonly sendButton: HTMLButtonElement;
 	private readonly addButton: HTMLButtonElement;
+	private readonly actionsButton: HTMLButtonElement;
 	private readonly autocomplete: NoteAutocomplete;
 	private generating = false;
 
@@ -42,6 +45,14 @@ export class Composer {
 		setTooltip(this.addButton, 'Attach the current note or a selection');
 		this.addButton.addEventListener('click', () =>
 			this.callbacks.onAddContext(this.addButton),
+		);
+		this.actionsButton = contextRow.createEl('button', { cls: 'obsaide-chip is-action' });
+		const actionsIcon = this.actionsButton.createSpan({ cls: 'obsaide-chip-icon' });
+		setIcon(actionsIcon, 'zap');
+		this.actionsButton.createSpan({ cls: 'obsaide-chip-label', text: 'Actions' });
+		setTooltip(this.actionsButton, 'Run a built-in or custom Aide action');
+		this.actionsButton.addEventListener('click', () =>
+			this.callbacks.onOpenActions(this.actionsButton),
 		);
 		this.attachmentsEl = contextRow.createDiv({ cls: 'obsaide-chips' });
 
