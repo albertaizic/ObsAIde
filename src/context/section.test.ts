@@ -102,8 +102,7 @@ describe('buildSectionTree', () => {
 		const sections = buildSectionTree(headings, lines);
 
 		expect(sections).toHaveLength(2);
-		// lines has 7 elements (0-6), so endLine is 7 (exclusive)
-		expect(sections[0].endLine).toBe(7); // Before second H2 (line 6), so up to line 6
+		expect(sections[0].endLine).toBe(6); // Before second H2 (line 6)
 		expect(sections[1].startLine).toBe(6);
 	});
 
@@ -116,8 +115,38 @@ describe('buildSectionTree', () => {
 		const sections = buildSectionTree(headings, lines);
 
 		expect(sections).toHaveLength(2);
-		expect(sections[0].endLine).toBe(7); // Before New H1 (line 6), so up to line 6
+		expect(sections[0].endLine).toBe(6); // Before New H1 (line 6)
 		expect(sections[1].startLine).toBe(6);
+	});
+
+	it('gives a top-level section the same container span whether or not it has children', () => {
+		// Regression test: a section's `endLine` (used for cursor hit-testing)
+		// must reach the next *sibling*, not stop at its own first child. A
+		// section with a deeply nested last child previously "leaked" past that
+		// child's end because only the section's own subsections were consulted.
+		const headings = [
+			makeHeading(1, 'Algorithms', 0),
+			makeHeading(2, 'Binary Search', 1),
+			makeHeading(3, 'Complexity', 3),
+			makeHeading(2, 'Linear Search', 5),
+		];
+		const lines = [
+			'# Algorithms', '## Binary Search', 'BS body', '### Complexity', 'O(log n)',
+			'## Linear Search', 'LS body',
+		];
+		const sections = buildSectionTree(headings, lines);
+		const algorithms = sections[0]!;
+		const binarySearch = algorithms.subsections[0]!;
+		const complexity = binarySearch.subsections[0]!;
+
+		// Binary Search's container must reach Linear Search (line 5), not stop
+		// at Complexity's own start (line 3).
+		expect(binarySearch.endLine).toBe(5);
+		expect(complexity.endLine).toBe(5);
+		// A cursor on Complexity's content line (4, "O(log n)") must resolve to
+		// Complexity, not fall through because Binary Search's container
+		// excluded it.
+		expect(findSectionAtCursor(sections, 4)?.heading.text).toBe('Complexity');
 	});
 
 	it('handles content before first heading', () => {
@@ -221,24 +250,108 @@ describe('getSectionBreadcrumbFull', () => {
 	});
 });
 
+function makeEditor(content: string, cursorLine: number): any {
+	return {
+		getValue: () => content,
+		getCursor: () => ({ line: cursorLine, ch: 0 }),
+	};
+}
+
+const ALGORITHMS_NOTE = [
+	'# Algorithms',
+	'',
+	'## Binary Search',
+	'',
+	'Binary search halves the search space.',
+	'',
+	'### Complexity',
+	'',
+	'O(log n).',
+	'',
+	'## Linear Search',
+	'',
+	'Checks every item.',
+].join('\n');
+
 describe('extractCurrentSection', () => {
-	// We test the pure logic by mocking the editor/file
-	it('returns whole note when no headings', () => {
-		// This test is more of an integration test requiring Obsidian mocks
-		// The pure functions above are the main testable units
-		expect(true).toBe(true);
+	it('returns whole note when the note has no headings at all', () => {
+		const editor = makeEditor('Just some text.\nNo headings here.', 0);
+		const result = extractCurrentSection(null as any, editor, { path: 'x.md', basename: 'x' } as any);
+		expect(result.section?.heading.text).toBe('x');
+		expect(result.fullContent).toBe('Just some text.\nNo headings here.');
+	});
+
+	it('resolves the deepest section and breadcrumb at the cursor', () => {
+		const cursorLine = ALGORITHMS_NOTE.split('\n').indexOf('O(log n).');
+		const editor = makeEditor(ALGORITHMS_NOTE, cursorLine);
+		const result = extractCurrentSection(
+			null as any,
+			editor,
+			{ path: 'Algorithms.md', basename: 'Algorithms' } as any,
+		);
+		expect(result.breadcrumb).toBe('Algorithms › Binary Search › Complexity');
+		expect(result.fullContent).toContain('### Complexity');
+		expect(result.fullContent).toContain('O(log n).');
+		expect(result.fullContent).not.toContain('Linear Search');
+	});
+
+	it('includes nested subsections when the cursor is in the parent section body', () => {
+		const cursorLine = ALGORITHMS_NOTE.split('\n').indexOf(
+			'Binary search halves the search space.',
+		);
+		const editor = makeEditor(ALGORITHMS_NOTE, cursorLine);
+		const result = extractCurrentSection(
+			null as any,
+			editor,
+			{ path: 'Algorithms.md', basename: 'Algorithms' } as any,
+		);
+		expect(result.breadcrumb).toBe('Algorithms › Binary Search');
+		expect(result.fullContent).toContain('### Complexity');
+		expect(result.fullContent).not.toContain('Linear Search');
+	});
+
+	it('reports no section when the cursor is before the first heading with no content there', () => {
+		const content = '\n\n# Title\n\ncontent';
+		const editor = makeEditor(content, 0);
+		const result = extractCurrentSection(null as any, editor, { path: 'x.md', basename: 'x' } as any);
+		expect(result.section).toBeNull();
+		expect(result.breadcrumb).toBe('No section at cursor');
+	});
+
+	it('does not fall back to the whole note when the cursor is before the first heading', () => {
+		const content = 'Some intro text.\n\n# Title\n\ncontent';
+		const editor = makeEditor(content, 0);
+		const result = extractCurrentSection(null as any, editor, { path: 'x.md', basename: 'x' } as any);
+		expect(result.section?.content).toBe('Some intro text.');
+		expect(result.fullContent).toBe(content);
 	});
 });
 
 describe('createSectionAttachment', () => {
-	it('creates attachment with breadcrumb', () => {
+	it('creates an attachment with a stable id and the resolved breadcrumb', () => {
+		const cursorLine = ALGORITHMS_NOTE.split('\n').indexOf('O(log n).');
+		const editor = makeEditor(ALGORITHMS_NOTE, cursorLine);
 		const attachment = createSectionAttachment(
-			null as any, // app
-			{ getCursor: () => ({ line: 5 }), getValue: () => '# H1\n## H2\ncontent' } as any,
-			{ path: 'test.md', basename: 'test' } as any,
+			null as any,
+			editor,
+			{ path: 'Algorithms.md', basename: 'Algorithms' } as any,
 			'primary',
 		);
-		// This requires Obsidian mocks, so we verify the interface
-		expect(typeof createSectionAttachment).toBe('function');
+		expect(attachment).not.toBeNull();
+		expect(attachment?.id).toBeTruthy();
+		expect(attachment?.kind).toBe('section');
+		expect(attachment?.breadcrumb).toBe('Algorithms › Binary Search › Complexity');
+	});
+
+	it('returns null when there is no file', () => {
+		const editor = makeEditor('# H1\ncontent', 0);
+		expect(createSectionAttachment(null as any, editor, null, 'primary')).toBeNull();
+	});
+
+	it('returns null when the cursor has no usable section', () => {
+		const editor = makeEditor('\n# Title\ncontent', 0);
+		expect(
+			createSectionAttachment(null as any, editor, { path: 'x.md', basename: 'x' } as any, 'primary'),
+		).toBeNull();
 	});
 });

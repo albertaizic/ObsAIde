@@ -311,31 +311,35 @@ export class NoteAutocomplete {
 		this.close();
 	}
 
-	/** Position autocomplete near the textarea cursor. */
+	/**
+	 * Position the autocomplete above the composer, anchored to it rather than
+	 * to the caret — a fixed-position popover placed outside the sidebar's
+	 * scroll container, so `.obsaide-view`'s `overflow: hidden` never clips it
+	 * and the composer itself never has to move to make room.
+	 */
 	private positionNearTextarea(textarea: HTMLTextAreaElement): void {
-		// Get cursor position in textarea
-		const cursorPos = this.triggerPosition;
-		const textBeforeCursor = textarea.value.slice(0, cursorPos);
-		const lines = textBeforeCursor.split('\n');
-		const lineIndex = lines.length - 1;
-		const line = lines[lineIndex];
-		const charIndex = line ? line.length : 0;
+		// Anchor to the whole composer, not just the textarea, so the popover
+		// tracks the input row even as it grows with typed text.
+		const composerEl = textarea.closest('.obsaide-composer');
+		const anchorEl = composerEl ?? textarea;
+		const anchorRect = anchorEl.getBoundingClientRect();
 
-		// Approximate character dimensions (monospace assumption for textarea)
-		const lineHeight = 20; // Approximate line height in pixels
-		const charWidth = 8; // Approximate character width in pixels
-
-		const textareaRect = textarea.getBoundingClientRect();
-		const top = textareaRect.top + lineIndex * lineHeight + lineHeight;
-		const left = textareaRect.left + charIndex * charWidth;
+		const gap = 8;
+		const margin = 8;
+		// Never exceed the space actually available above the composer, so the
+		// list can't overlap the header or run off the top of the window.
+		const maxHeight = Math.max(120, Math.min(300, anchorRect.top - gap - margin));
+		const containerWidth = Math.min(400, anchorRect.width);
+		const top = Math.max(margin, anchorRect.top - maxHeight - gap);
+		const left = anchorRect.left;
 
 		this.container.setCssStyles({
 			position: 'fixed',
 			top: `${top}px`,
 			left: `${left}px`,
 			zIndex: '1000',
-			maxHeight: '300px',
-			width: '400px',
+			maxHeight: `${maxHeight}px`,
+			width: `${containerWidth}px`,
 		});
 	}
 

@@ -1,4 +1,6 @@
 import { type App, type Editor, TFile } from 'obsidian';
+import { createId } from '../utils/id';
+import type { SectionAttachment } from './types';
 
 /** Represents a Markdown heading with its level and position. */
 export interface Heading {
@@ -14,6 +16,7 @@ export interface MarkdownSection {
 	startLine: number; // 0-based inclusive
 	endLine: number; // 0-based exclusive
 	subsections: MarkdownSection[];
+	parent: MarkdownSection | null;
 }
 
 /**
@@ -39,18 +42,41 @@ export function parseHeadings(content: string): Heading[] {
 
 /**
  * Build a section tree from headings.
+ *
+ * `endLine` is the section's *container* boundary — it runs until the next
+ * heading at the same or higher level, so it spans every nested subsection
+ * too. This is what cursor hit-testing (`findSectionAtCursor`) relies on: a
+ * cursor anywhere inside "Binary Search", including inside its "Complexity"
+ * subsection, must be recognised as inside "Binary Search". `content`, by
+ * contrast, is only the text directly under the heading, stopping at its
+ * first child — that boundary is computed separately below.
  */
 export function buildSectionTree(headings: Heading[], lines: string[]): MarkdownSection[] {
 	const sections: MarkdownSection[] = [];
 	const stack: (MarkdownSection & { heading: Heading })[] = [];
 
-	for (const heading of headings) {
+	for (let i = 0; i < headings.length; i++) {
+		const heading = headings[i];
+		if (!heading) continue;
+
+		// Container boundary: the next heading at the same or higher level,
+		// wherever it is in the flat heading list, or end of file.
+		let containerEnd = lines.length;
+		for (let j = i + 1; j < headings.length; j++) {
+			const next = headings[j];
+			if (next && next.level <= heading.level) {
+				containerEnd = next.line;
+				break;
+			}
+		}
+
 		const section: MarkdownSection & { heading: Heading } = {
 			heading,
 			content: '',
 			startLine: heading.line,
-			endLine: lines.length,
+			endLine: containerEnd,
 			subsections: [],
+			parent: null,
 		};
 
 		// Find parent (last heading with lower level)
@@ -63,7 +89,10 @@ export function buildSectionTree(headings: Heading[], lines: string[]): Markdown
 		if (stack.length > 0) {
 			// Add as subsection of parent
 			const parent = stack[stack.length - 1];
-			if (parent) parent.subsections.push(section);
+			if (parent) {
+				section.parent = parent;
+				parent.subsections.push(section);
+			}
 		} else {
 			// Top-level section
 			sections.push(section);
@@ -72,7 +101,7 @@ export function buildSectionTree(headings: Heading[], lines: string[]): Markdown
 		stack.push(section);
 	}
 
-	// Calculate content for each section
+	// Own content stops at the first child, independent of the container span.
 	for (const section of sections) {
 		calculateSectionContent(section, lines);
 	}
@@ -82,16 +111,8 @@ export function buildSectionTree(headings: Heading[], lines: string[]): Markdown
 
 function calculateSectionContent(section: MarkdownSection, lines: string[]): void {
 	const start = section.startLine + 1; // Content starts after heading
-	let end = section.endLine;
+	const end = section.subsections.length > 0 ? section.subsections[0]!.startLine : section.endLine;
 
-	// Find the end of this section (next same/higher level heading)
-	for (const sub of section.subsections) {
-		if (sub.startLine < end) {
-			end = sub.startLine;
-		}
-	}
-
-	section.endLine = end;
 	section.content = lines.slice(start, end).join('\n').trim();
 
 	// Recurse for subsections
@@ -124,45 +145,50 @@ export function findSectionAtCursor(
 
 /**
  * Get the breadcrumb path for a section (e.g., "Algorithms › Binary Search › Complexity").
+ * Uses the parent reference for efficient breadcrumb generation.
  */
 export function getSectionBreadcrumb(section: MarkdownSection): string {
+	const path: Heading[] = [];
 	let current: MarkdownSection | null = section;
-	const stack: MarkdownSection[] = [];
 
 	while (current) {
-		stack.push(current);
-		// Find parent by checking which section contains this one
-		// This is a simplification - in reality we'd track parents
-		current = null;
+		if (current.heading) {
+			path.unshift(current.heading);
+		}
+		current = current.parent;
 	}
 
-	// Since we don't track parents, we'll build from the root
-	// For now, just return the heading text
-	return section.heading.text;
+	return path.map((h) => h.text).join(' › ');
 }
 
 /**
  * Get the full breadcrumb by walking up the section tree.
- * This requires the root sections to find the path.
+ *
+ * Prefers the `parent` reference when present (fast path for trees built by
+ * `buildSectionTree`), but falls back to searching `rootSections` so callers
+ * that construct a `MarkdownSection` tree without wiring `parent` (e.g. tests)
+ * still get a correct breadcrumb.
  */
 export function getSectionBreadcrumbFull(
 	rootSections: MarkdownSection[],
 	target: MarkdownSection,
 ): string {
+	if (target.parent) return getSectionBreadcrumb(target);
+
 	const path: Heading[] = [];
 
-	function findPath(sections: MarkdownSection[], target: MarkdownSection): boolean {
+	function findPath(sections: MarkdownSection[], node: MarkdownSection): boolean {
 		for (const section of sections) {
 			if (!section.heading) continue;
 			path.push(section.heading);
-			if (section === target) return true;
-			if (findPath(section.subsections, target)) return true;
+			if (section === node) return true;
+			if (findPath(section.subsections, node)) return true;
 			path.pop();
 		}
 		return false;
 	}
 
-	findPath(rootSections, target);
+	if (!findPath(rootSections, target)) return getSectionBreadcrumb(target);
 	return path.map((h) => h.text).join(' › ');
 }
 
@@ -192,6 +218,7 @@ export function extractCurrentSection(
 				startLine: 0,
 				endLine: lines.length,
 				subsections: [],
+				parent: null,
 			},
 			breadcrumb: file.basename,
 			fullContent: content,
@@ -215,6 +242,14 @@ export function extractCurrentSection(
 		}
 		const firstHeadingLine = firstHeading.line;
 		const beforeContent = lines.slice(0, firstHeadingLine).join('\n').trim();
+		// If there's no meaningful content before the first heading, report no section
+		if (!beforeContent) {
+			return {
+				section: null,
+				breadcrumb: 'No section at cursor',
+				fullContent: content,
+			};
+		}
 		return {
 			section: {
 				heading: { level: 0, text: 'Before first heading', line: -1 },
@@ -222,6 +257,7 @@ export function extractCurrentSection(
 				startLine: 0,
 				endLine: firstHeadingLine,
 				subsections: [],
+				parent: null,
 			},
 			breadcrumb: file.basename + ' › (before first heading)',
 			fullContent: content,
@@ -231,7 +267,7 @@ export function extractCurrentSection(
 	const breadcrumb = getSectionBreadcrumbFull(sections, section);
 
 	// Build full section content including heading and subsections
-	let fullSectionContent = `#{'#'.repeat(section.heading.level)} ${section.heading.text}\n\n`;
+	let fullSectionContent = `${'#'.repeat(section.heading.level)} ${section.heading.text}\n\n`;
 	fullSectionContent += section.content;
 
 	// Include subsections
@@ -249,15 +285,6 @@ export function extractCurrentSection(
 /**
  * Extract the section as a context attachment.
  */
-export interface SectionAttachment {
-	kind: 'section';
-	path: string;
-	title: string;
-	breadcrumb: string;
-	content: string;
-	role: 'primary' | 'supporting';
-}
-
 export function createSectionAttachment(
 	app: App,
 	editor: Editor,
@@ -271,6 +298,7 @@ export function createSectionAttachment(
 	if (!section || !fullContent.trim()) return null;
 
 	return {
+		id: createId('a-'),
 		kind: 'section',
 		path: file.path,
 		title: `Section: ${section.heading.text}`,
