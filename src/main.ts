@@ -15,6 +15,7 @@ import {
 	type ObsAideSettings,
 } from './settings/types';
 import { AideChatView } from './ui/chat-view';
+import { InlineAideMenu } from './ui/inline-menu';
 
 /**
  * ObsAIde plugin entry point.
@@ -30,6 +31,8 @@ export default class ObsAidePlugin extends Plugin {
 	chat!: ChatController;
 	/** Runtime-only map from reply to the editor it was generated from. */
 	readonly editTargets = new EditTargetRegistry();
+	/** Inline menu for selected text. */
+	inlineMenu!: InlineAideMenu;
 
 	async onload(): Promise<void> {
 		const stored: unknown = await this.loadData();
@@ -63,11 +66,16 @@ export default class ObsAidePlugin extends Plugin {
 		registerCommands(this);
 		registerEditorMenu(this);
 
+		// Inline selection menu
+		this.inlineMenu = new InlineAideMenu(this);
+		this.inlineMenu.enable();
+
 		this.addSettingTab(new ObsAideSettingTab(this.app, this));
 	}
 
 	override onunload(): void {
 		this.chat?.stop();
+		this.inlineMenu?.disable();
 		this.editTargets.clear();
 		this.conversations?.dispose();
 		// Obsidian does not await `onunload`; the final write is fired here and
