@@ -4,7 +4,7 @@ An AI assistant built into Obsidian. **Aide** lives in the right sidebar, unders
 
 ObsAIde talks directly to the provider you choose — OpenRouter, OpenAI, Anthropic, Google Gemini, Groq, Mistral, or any OpenAI-compatible endpoint including a local server. There is no ObsAIde backend, no account and no telemetry.
 
-> Status: `0.1.0`. The plugin ID is `obsaide` and is stable.
+> Status: `0.2.0`. The plugin ID is `obsaide` and is stable.
 
 ---
 
@@ -18,6 +18,14 @@ ObsAIde talks directly to the provider you choose — OpenRouter, OpenAI, Anthro
 - **Tutor mode** — switches Aide from "give me the answer" to "help me understand it".
 - **Concise by default** — answers lead with the answer. Ask for note content and you get the content, not "Sure! Here's a paragraph you could add:".
 - **Explicit context** — nothing from your vault is sent unless you attach it, and the composer shows exactly what will go.
+- **@note references** — type `@` in the composer to autocomplete and attach any Markdown note by path/name. Duplicate filenames are distinguished by path.
+- **Inline selection menu** — a compact ✨ Aide trigger appears near selected text, opening the full action list without the two-step context menu.
+- **Append to note / Create new note** — any assistant reply can be appended to an existing note or create a new note in a chosen folder.
+- **Custom AI actions** — create reusable actions in Settings (e.g., "Make flashcards", "Find weaknesses") with configurable context/output modes.
+- **Save conversation as note** — export the full transcript or answers-only to a Markdown note with frontmatter.
+- **Short / Normal / Detailed** — a compact header selector controls response verbosity at the prompt level (default: Normal).
+- **Current section context** — attach the Markdown section containing the cursor (by heading hierarchy, including nested subsections).
+- **Smart context scope selector** — choose None / Selection / Section / Note / Linked notes / Folder as the automatic context scope, separate from manual attachments.
 
 ## Screenshots
 
@@ -217,8 +225,11 @@ The editor context menu adds **Ask Aide about this** and **Aide actions…**.
 | Stream responses | Falls back to a buffered request where streaming is unavailable |
 | Temperature / creativity | `0.0`–`1.0`, default `0.3`. Clamped per provider, and omitted entirely for models that reject it |
 | Maximum response length | A cap, not a target: length is governed by the prompt |
+| Response length | Short / Normal / Detailed — controls prompt-level verbosity (default: Normal) |
 | Context budgets | Per-note and per-request character limits |
 | Conversation history | Store locally, or turn off and delete |
+| Context scope | Default automatic context: None / Selection / Section / Note / Linked / Folder |
+| Custom actions | Create, edit, delete, enable/disable reusable AI actions |
 
 Temperature is capped at `1.0` on purpose: above that most chat models degrade into incoherent output, and a global slider is the wrong place to do that by accident. A value stored by an earlier version is clamped and rewritten on load, so it cannot keep being sent invisibly.
 
@@ -276,11 +287,10 @@ Adding a provider means writing one adapter and one catalogue entry. Adding a no
 
 ## Roadmap
 
-- Prompt library with user-defined actions
 - Attaching search results as context
-- Exporting a conversation to a note
 - Per-conversation provider and model overrides
 - Token and cost estimates before sending
+- Vault-wide semantic search as context
 
 ## License
 

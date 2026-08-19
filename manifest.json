@@ -1,7 +1,7 @@
 {
 	"id": "obsaide",
 	"name": "ObsAIde",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"minAppVersion": "1.7.2",
 	"description": "Aide, an AI assistant in your sidebar: chat, ask about a selection, and safely rewrite notes with the provider of your choice.",
 	"author": "albertaizic",

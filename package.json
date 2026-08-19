@@ -1,6 +1,6 @@
 {
 	"name": "obsaide",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Aide, an AI assistant built into Obsidian.",
 	"main": "main.js",
 	"type": "module",
