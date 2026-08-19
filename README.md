@@ -4,7 +4,7 @@ An AI assistant built into Obsidian. **Aide** lives in the right sidebar, unders
 
 ObsAIde talks directly to the provider you choose — OpenRouter, OpenAI, Anthropic, Google Gemini, Groq, Mistral, or any OpenAI-compatible endpoint including a local server. There is no ObsAIde backend, no account and no telemetry.
 
-> Status: `0.2.0`. The plugin ID is `obsaide` and is stable.
+> Status: `0.3.0`. The plugin ID is `obsaide` and is stable.
 
 ---
 
@@ -26,6 +26,14 @@ ObsAIde talks directly to the provider you choose — OpenRouter, OpenAI, Anthro
 - **Short / Normal / Detailed** — a compact header selector controls response verbosity at the prompt level (default: Normal).
 - **Current section context** — attach the Markdown section containing the cursor (by heading hierarchy, including nested subsections).
 - **Smart context scope selector** — choose None / Selection / Section / Note / Linked notes / Folder as the automatic context scope, separate from manual attachments.
+
+### New in 0.3.0
+
+- **Vault Search** — search across your Markdown notes by title, path, headings, or content. Results are ranked by relevance (title/phrase matches first), shown in a modal with snippets, and you choose which notes become context. No background indexing, no embeddings, fully local.
+- **Interactive Quiz Mode** — start a quiz from attached notes (selection, section, note, folder, or vault search results). Configure question count (5/10/15/unlimited), difficulty (easy/medium/hard/mixed), and style (short answer/multiple choice/mixed). Aide asks one question at a time, you answer, it grades with feedback, and continues. Shows progress and final score with topics to review. Quiz state persists in the conversation.
+- **Wikilink Suggestions** — for the current selection, section, or note, Aide discovers existing notes by title/aliases/headings, ranks them by relevance, and suggests `[[wikilinks]]` with the source phrase. You review and apply with aliases (`[[Target|source phrase]]`). Skips code blocks, inline code, frontmatter, and existing links.
+- **Conversation Branching** — from any message in a conversation, choose "Branch from here" to create a new conversation with history up to that point. The original remains untouched. Branches persist independently with parent metadata.
+- **Assistant Profiles** — named reusable configurations (General, Tutor, Writer, Coding Assistant, Researcher) with custom instructions, optional provider/model override, and response length. Create custom profiles, switch per conversation. Tutor mode is now the Tutor profile. Profiles and custom actions remain separate concepts.
 
 ## Screenshots
 
@@ -230,6 +238,7 @@ The editor context menu adds **Ask Aide about this** and **Aide actions…**.
 | Conversation history | Store locally, or turn off and delete |
 | Context scope | Default automatic context: None / Selection / Section / Note / Linked / Folder |
 | Custom actions | Create, edit, delete, enable/disable reusable AI actions |
+| Assistant profiles | Create, edit, delete, enable/disable profiles; set active profile per conversation; built-in: General, Tutor, Writer, Coding Assistant, Researcher |
 
 Temperature is capped at `1.0` on purpose: above that most chat models degrade into incoherent output, and a global slider is the wrong place to do that by accident. A value stored by an earlier version is clamped and rewritten on load, so it cannot keep being sent invisibly.
 
@@ -264,22 +273,22 @@ src/
     anthropic.ts  gemini.ts  openrouter.ts
     service.ts            settings-aware facade used by the rest of the plugin
 
-  chat/                   conversation model, local store, chat controller
-  context/                attachment capture, folder collection, formatting
+  chat/                   conversation model, local store, chat controller, quiz logic
+  context/                attachment capture, folder collection, formatting, vault search, wikilinks
   actions/                note actions, edit anchors, safe apply
   prompts/                all prompt text
-  settings/               settings schema, validation and settings tab
+  settings/               settings schema, validation, settings tab, profiles
   ui/                     views, modals, scroll handling
   utils/                  ids, text, diff, secret redaction
 ```
 
-Adding a provider means writing one adapter and one catalogue entry. Adding a note action means adding one entry to `src/actions/registry.ts`.
+Adding a provider means writing one adapter and one catalogue entry. Adding a note action means adding one entry to `src/actions/registry.ts`. Adding a profile means adding an entry to `src/settings/profiles.ts`.
 
 ## Known limitations
 
 - **Markdown only, by design.** No images, PDFs, CSVs or provider-native file uploads. ObsAIde attaches Obsidian notes.
 - **Text only.** No image input, tool use or function calling.
-- **No vault-wide search.** Aide sees what you attach and nothing else, so it cannot answer "which of my notes mentions X" without you attaching the folder.
+- **Local keyword search only.** Vault Search uses title/heading/content keyword matching — not semantic/embedding search. It cannot answer "which note discusses the concept of X" without matching keywords.
 - **Insertion requires the note to be open.** If the originating note has been closed, insert options are hidden and only copy remains.
 - **Streaming depends on the environment.** Where the renderer blocks a cross-origin streaming request, replies arrive all at once.
 - **Model lists are the provider's.** A listing that includes non-chat models will show them.
@@ -287,8 +296,7 @@ Adding a provider means writing one adapter and one catalogue entry. Adding a no
 
 ## Roadmap
 
-- Attaching search results as context
-- Per-conversation provider and model overrides
+- Per-conversation provider and model overrides (profiles partially address this)
 - Token and cost estimates before sending
 - Vault-wide semantic search as context
 
