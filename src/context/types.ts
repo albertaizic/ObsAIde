@@ -6,7 +6,7 @@
  * selection, running a note action) and is visible in the composer before the
  * request is sent.
  */
-export type AttachmentKind = 'selection' | 'note' | 'folder';
+export type AttachmentKind = 'selection' | 'note' | 'folder' | 'section';
 
 /**
  * How the model should weight a piece of context.
@@ -64,4 +64,15 @@ export interface ResolvedAttachment {
 export interface ContextLimits {
 	maxCharsPerNote: number;
 	maxContextChars: number;
+}
+
+/** A Markdown section attachment (from current section context). */
+export interface SectionAttachment {
+	id: string;
+	kind: 'section';
+	path: string;
+	title: string;
+	breadcrumb: string;
+	content: string;
+	role: ContextRole;
 }

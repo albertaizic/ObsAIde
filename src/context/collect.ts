@@ -2,6 +2,7 @@ import { MarkdownView, TFile, TFolder, type App, type Editor } from 'obsidian';
 import { createId } from '../utils/id';
 import { summarize } from '../utils/text';
 import { folderDisplayName, selectFolderNotePaths } from './folder';
+import { createSectionAttachment, type SectionAttachment } from './section';
 import type { Attachment, ContextRole } from './types';
 
 /** The editor the user is working in, if any. */
@@ -153,4 +154,14 @@ export function captureAskContext(app: App): Attachment[] {
 
 	const activeFile = app.workspace.getActiveFile();
 	return activeFile ? [captureNote(activeFile, 'primary')] : [];
+}
+
+/** Capture the current Markdown section as context. */
+export function captureSection(
+	app: App,
+	editor: Editor,
+	file: TFile | null,
+	role: ContextRole = 'primary',
+): SectionAttachment | null {
+	return createSectionAttachment(app, editor, file, role);
 }

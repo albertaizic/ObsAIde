@@ -6,6 +6,7 @@ import {
 	setTooltip,
 	type MarkdownView,
 	type WorkspaceLeaf,
+	TFile,
 } from 'obsidian';
 import { AIDE_ICON, ASSISTANT_NAME, CHAT_VIEW_TYPE } from '../constants';
 import type { NoteEditAnchor } from '../actions/anchor';
@@ -16,17 +17,18 @@ import {
 	type ResolvedEditTarget,
 } from '../actions/edit-target';
 import type { ChatController, SendRequest } from '../chat/controller';
-import { isEmptyConversation, type ConversationMessage } from '../chat/conversation';
+import { isEmptyConversation, type Conversation, type ConversationMessage } from '../chat/conversation';
 import {
 	captureFolder,
 	captureNote,
 	captureSelection,
+	captureSection,
 	getEditorTarget,
 	isDuplicateAttachment,
 } from '../context/collect';
 import type { Attachment } from '../context/types';
 import { getProviderDescriptor } from '../providers/catalog';
-import { isProviderConfigured } from '../settings/types';
+import { isProviderConfigured, type ContextScope } from '../settings/types';
 import { summarize } from '../utils/text';
 import { AttachmentDetailsModal } from './attachment-details';
 import { Composer } from './composer';
@@ -36,6 +38,7 @@ import { FolderPickerModal } from './folder-picker';
 import { MessageList } from './message-list';
 import { ModelPickerModal } from './model-picker';
 import { NotePickerModal } from './note-picker';
+import { PromptModal } from './prompt-modal';
 import { BottomScroller } from './scroller';
 import type ObsAidePlugin from '../main';
 
@@ -49,6 +52,8 @@ export class AideChatView extends ItemView {
 	private scroller!: BottomScroller;
 	private providerButton!: HTMLButtonElement;
 	private modelButton!: HTMLButtonElement;
+	private lengthButton!: HTMLButtonElement;
+	private scopeButton!: HTMLButtonElement;
 	private modeBadge!: HTMLElement;
 	private scrollerEl!: HTMLElement;
 	private flowEl!: HTMLElement;
@@ -97,7 +102,8 @@ export class AideChatView extends ItemView {
 				this.composer.setAttachments(this.attachments);
 			},
 			onInspectAttachment: (attachment) => this.inspect(attachment),
-		});
+			onAddNoteAttachment: (attachment) => this.addAttachment(attachment),
+		}, this.app);
 
 		this.unsubscribe = this.controller.onChange((reason) => {
 			if (reason === 'stream') {
@@ -121,6 +127,7 @@ export class AideChatView extends ItemView {
 			this.streamTimer = null;
 		}
 		this.messageList?.destroy();
+		this.composer?.destroy();
 		this.contentEl.empty();
 	}
 
@@ -192,6 +199,8 @@ export class AideChatView extends ItemView {
 			onOpenSettings: () => this.plugin.openSettings(),
 			onUseInNote: (message) => this.openReview(message),
 			onInsertAtCursor: (message) => void this.insertAtCursor(message),
+			onAppendToNote: (message) => void this.appendToNote(message),
+			onCreateNote: (message) => void this.createNoteFromReply(message),
 			canInsert: (message) => this.resolveTarget(message) !== null,
 			onInspectAttachment: (attachment) => this.inspect(attachment),
 		});
@@ -205,6 +214,14 @@ export class AideChatView extends ItemView {
 		this.providerButton.addEventListener('click', () => this.showProviderMenu());
 		this.modelButton = selectors.createEl('button', { cls: 'obsaide-select is-model' });
 		this.modelButton.addEventListener('click', () => this.openModelPicker());
+
+		// Response length selector
+		this.lengthButton = selectors.createEl('button', { cls: 'obsaide-select is-length' });
+		this.lengthButton.addEventListener('click', () => this.showLengthMenu());
+
+		// Context scope selector
+		this.scopeButton = selectors.createEl('button', { cls: 'obsaide-select is-scope' });
+		this.scopeButton.addEventListener('click', () => this.showScopeMenu());
 
 		const actions = header.createDiv({ cls: 'obsaide-header-actions' });
 		this.modeBadge = actions.createSpan({ cls: 'obsaide-mode-badge', text: 'Tutor' });
@@ -263,6 +280,63 @@ export class AideChatView extends ItemView {
 		}
 	}
 
+	/** Append the reply to an existing note. */
+	private appendToNote(message: ConversationMessage): void {
+		new NotePickerModal(this.app, (file) => {
+			void (async () => {
+				try {
+					const content = await this.app.vault.cachedRead(file);
+					const separator = content.endsWith('\n') ? '' : '\n';
+					await this.app.vault.modify(file, `${content}${separator}\n\n---\n\n${message.text}`);
+					new Notice(`Appended to ${file.basename}`);
+					// Optionally open the note
+					const leaf = this.app.workspace.getLeaf(false);
+					if (leaf) await leaf.openFile(file);
+				} catch {
+					new Notice('Could not append to the note.');
+				}
+			})();
+		}).open();
+	}
+
+	/** Create a new note with the reply as content. */
+	private createNoteFromReply(message: ConversationMessage): void {
+		new PromptModal(this.app, {
+			title: 'Create new note',
+			description: 'Enter a name for the new note (without .md extension)',
+			placeholder: 'My AI Response',
+			submitText: 'Create',
+			onSubmit: (name) => {
+				void (async () => {
+					const trimmed = name.trim();
+					if (!trimmed) {
+						new Notice('Please enter a note name.');
+						return;
+					}
+					// Sanitize filename
+					const sanitized = trimmed.replace(/[<>:"/\\|?*]/g, '-');
+					const folder = this.app.workspace.getActiveFile()?.parent ?? this.app.vault.getRoot();
+					let path = `${folder.path}/${sanitized}.md`;
+					// Ensure unique path
+					let counter = 1;
+					let finalPath = path;
+					while (this.app.vault.getAbstractFileByPath(finalPath)) {
+						finalPath = `${folder.path}/${sanitized} ${counter}.md`;
+						counter++;
+					}
+					try {
+						const file = await this.app.vault.create(finalPath, message.text);
+						new Notice(`Created ${file.basename}`);
+						const leaf = this.app.workspace.getLeaf(false);
+						if (leaf) await leaf.openFile(file);
+					} catch {
+						new Notice('Could not create the note.');
+					}
+				})();
+			},
+		}).open();
+	}
+
 	private inspect(attachment: Attachment): void {
 		new AttachmentDetailsModal(this.app, attachment).open();
 	}
@@ -313,6 +387,158 @@ export class AideChatView extends ItemView {
 		).open();
 	}
 
+	private showLengthMenu(): void {
+		const menu = new Menu();
+		const currentLength = this.controller.getSettings().responseLength ?? 'normal';
+
+		for (const [value, label] of [
+			['short', 'Short'],
+			['normal', 'Normal'],
+			['detailed', 'Detailed'],
+		] as const) {
+			menu.addItem((item) =>
+				item
+					.setTitle(label)
+					.setChecked(value === currentLength)
+					.onClick(async () => {
+						const settings = this.controller.getSettings();
+						settings.responseLength = value;
+						await this.controller.saveSettings();
+						this.updateLengthButton();
+					}),
+			);
+		}
+
+		const rect = this.lengthButton.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+	}
+
+	private updateLengthButton(): void {
+		const settings = this.controller.getSettings();
+		const length = settings.responseLength ?? 'normal';
+		const labels: Record<string, string> = { short: 'Short', normal: 'Normal', detailed: 'Detailed' };
+		this.lengthButton.setText(labels[length] ?? 'Normal');
+		setTooltip(this.lengthButton, `Response length: ${labels[length]}. Click to change.`);
+	}
+
+	private showScopeMenu(): void {
+		const menu = new Menu();
+		const currentScope = this.controller.getSettings().contextScope ?? 'selection';
+
+		const scopes: [ContextScope, string][] = [
+			['none', 'None'],
+			['selection', 'Selection'],
+			['section', 'Section'],
+			['note', 'Note'],
+			['linked', 'Linked notes'],
+			['folder', 'Folder'],
+		];
+
+		for (const [value, label] of scopes) {
+			menu.addItem((item) =>
+				item
+					.setTitle(label)
+					.setChecked(value === currentScope)
+					.onClick(async () => {
+						const settings = this.controller.getSettings();
+						settings.contextScope = value;
+						await this.controller.saveSettings();
+						this.updateScopeButton();
+						// Apply the scope context immediately
+						await this.applyScopeContext();
+					}),
+			);
+		}
+
+		const rect = this.scopeButton.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+	}
+
+	private updateScopeButton(): void {
+		const settings = this.controller.getSettings();
+		const scope = settings.contextScope ?? 'selection';
+		const labels: Record<string, string> = {
+			none: 'None',
+			selection: 'Selection',
+			section: 'Section',
+			note: 'Note',
+			linked: 'Linked notes',
+			folder: 'Folder',
+		};
+		this.scopeButton.setText(labels[scope] ?? 'Selection');
+		setTooltip(this.scopeButton, `Context scope: ${labels[scope]}. Click to change.`);
+	}
+
+	private async applyScopeContext(): Promise<void> {
+		// Clear existing scope-based attachments (keep manual/@note attachments)
+		const manualAttachments = this.attachments.filter(
+			(a) => a.kind === 'note' || a.kind === 'folder',
+		);
+		// Note: @note attachments are also 'note' kind but we want to keep them
+		// For simplicity, we'll just clear all auto-captured context
+		this.attachments = manualAttachments;
+
+		const scope = this.controller.getSettings().contextScope ?? 'selection';
+		if (scope === 'none') {
+			this.composer.setAttachments(this.attachments);
+			return;
+		}
+
+		const target = getEditorTarget(this.app);
+		if (!target) {
+			this.composer.setAttachments(this.attachments);
+			return;
+		}
+
+		if (scope === 'selection') {
+			const selection = captureSelection(target.editor, target.file, 'primary');
+			if (selection) {
+				this.addAttachment(selection);
+				if (target.file) {
+					this.addAttachment(captureNote(target.file, 'supporting'));
+				}
+			} else if (target.file) {
+				this.addAttachment(captureNote(target.file, 'primary'));
+			}
+		} else if (scope === 'section') {
+			const sectionAttach = captureSection(this.app, target.editor, target.file, 'primary');
+			if (sectionAttach) this.addAttachment(sectionAttach as unknown as Attachment);
+		} else if (scope === 'note' && target.file) {
+			this.addAttachment(captureNote(target.file, 'primary'));
+		} else if (scope === 'linked' && target.file) {
+			await this.addLinkedNotes(target.file);
+		} else if (scope === 'folder') {
+			// Folder picker would need to be opened - for now just notify
+			new Notice('Select a folder from the context menu');
+		}
+
+		this.composer.setAttachments(this.attachments);
+	}
+
+	private async addLinkedNotes(file: TFile): Promise<void> {
+		const cache = this.app.metadataCache.getFileCache(file);
+		if (!cache?.links) return;
+
+		const linkedFiles: TFile[] = [];
+		for (const link of cache.links) {
+			const linkedFile = this.app.metadataCache.getFirstLinkpathDest(link.link, file.path);
+			if (linkedFile instanceof TFile && linkedFile.extension === 'md') {
+				linkedFiles.push(linkedFile);
+			}
+		}
+
+		if (linkedFiles.length === 0) {
+			new Notice('No linked Markdown notes found');
+			return;
+		}
+
+		// Show picker for linked notes
+		new NotePickerModal(this.app, (selectedFile) => {
+			this.addAttachment(captureNote(selectedFile, 'primary'));
+			this.composer.setAttachments(this.attachments);
+		}).open();
+	}
+
 	private showOverflowMenu(event: MouseEvent): void {
 		const menu = new Menu();
 		const conversation = this.controller.current;
@@ -338,6 +564,13 @@ export class AideChatView extends ItemView {
 				.onClick(() =>
 					this.controller.setMode(conversation.mode === 'tutor' ? 'chat' : 'tutor'),
 				),
+		);
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle('Save conversation as note…')
+				.setIcon('file-down')
+				.onClick(() => this.exportConversation(conversation)),
 		);
 		menu.addSeparator();
 		menu.addItem((item) =>
@@ -371,6 +604,98 @@ export class AideChatView extends ItemView {
 		new ConversationPickerModal(this.app, conversations, (conversation) =>
 			this.controller.openConversation(conversation.id),
 		).open();
+	}
+
+	/** Export the current conversation as a Markdown note. */
+	private exportConversation(conversation: Conversation): void {
+		new PromptModal(this.app, {
+			title: 'Export conversation',
+			description: 'Choose export format and note name',
+			placeholder: conversation.title || 'Conversation Export',
+			submitText: 'Export',
+			onSubmit: (name) => {
+				const trimmed = name.trim();
+				if (!trimmed) {
+					new Notice('Please enter a note name.');
+					return;
+				}
+				// Show format picker
+				new Menu().addItem((item) =>
+					item
+						.setTitle('Full conversation (with questions)')
+						.setIcon('file-text')
+						.onClick(() => this.writeConversationNote(conversation, trimmed, 'full')),
+				).addItem((item) =>
+					item
+						.setTitle('Answers only')
+						.setIcon('list')
+						.onClick(() => this.writeConversationNote(conversation, trimmed, 'answers')),
+				).showAtMouseEvent({ clientX: 0, clientY: 0 } as MouseEvent);
+			},
+		}).open();
+	}
+
+	private writeConversationNote(
+		conversation: Conversation,
+		name: string,
+		format: 'full' | 'answers',
+	): void {
+		const sanitized = name.replace(/[<>:"/\\|?*]/g, '-');
+		const folder = this.app.workspace.getActiveFile()?.parent ?? this.app.vault.getRoot();
+		let path = `${folder.path}/${sanitized}.md`;
+		let counter = 1;
+		let finalPath = path;
+		while (this.app.vault.getAbstractFileByPath(finalPath)) {
+			finalPath = `${folder.path}/${sanitized} ${counter}.md`;
+			counter++;
+		}
+
+		const lines: string[] = [
+			'---',
+			`created: ${new Date().toISOString().split('T')[0]}`,
+			'source: ObsAIde',
+			'---',
+			'',
+			`# ${sanitized}`,
+			'',
+		];
+
+		if (format === 'full') {
+			for (const message of conversation.messages) {
+				if (message.role === 'user') {
+					const prefix = message.actionLabel ? `${message.actionLabel}: ` : '';
+					lines.push(`## You`);
+					lines.push('');
+					lines.push(`${prefix}${message.text}`);
+					lines.push('');
+				} else if (message.role === 'assistant' && message.text.trim() && !message.error) {
+					lines.push(`## ${ASSISTANT_NAME}`);
+					lines.push('');
+					lines.push(message.text);
+					lines.push('');
+				}
+			}
+		} else {
+			// Answers only
+			for (const message of conversation.messages) {
+				if (message.role === 'assistant' && message.text.trim() && !message.error) {
+					lines.push(message.text);
+					lines.push('');
+					lines.push('---');
+					lines.push('');
+				}
+			}
+		}
+
+		const content = lines.join('\n');
+
+		void this.app.vault.create(finalPath, content).then(async (file) => {
+			new Notice(`Exported to ${file.basename}`);
+			const leaf = this.app.workspace.getLeaf(false);
+			if (leaf) await leaf.openFile(file);
+		}).catch(() => {
+			new Notice('Could not create the note.');
+		});
 	}
 
 	// --- context -------------------------------------------------------------
@@ -495,6 +820,8 @@ export class AideChatView extends ItemView {
 		const model = this.controller.model || 'Choose a model';
 		this.modelButton.setText(summarize(model, 28));
 		setTooltip(this.modelButton, `Model: ${model}. Select to change.`);
+
+		this.updateLengthButton();
 
 		this.modeBadge.toggleClass('is-visible', this.controller.current.mode === 'tutor');
 	}

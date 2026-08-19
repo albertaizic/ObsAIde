@@ -1,7 +1,8 @@
-import { setIcon, setTooltip } from 'obsidian';
+import { setIcon, setTooltip, type App } from 'obsidian';
 import type { Attachment } from '../context/types';
 import { summarize } from '../utils/text';
 import { attachmentIcon, attachmentLabel } from './attachment-chip';
+import { NoteAutocomplete, type NoteAttachment } from './note-autocomplete';
 
 export interface ComposerCallbacks {
 	onSend: (text: string) => void;
@@ -11,6 +12,8 @@ export interface ComposerCallbacks {
 	onRemoveAttachment: (id: string) => void;
 	/** Show which notes a folder attachment covers. */
 	onInspectAttachment: (attachment: Attachment) => void;
+	/** Add a note attachment from @ autocomplete. */
+	onAddNoteAttachment: (attachment: NoteAttachment) => void;
 }
 
 const MAX_TEXTAREA_HEIGHT = 220;
@@ -21,11 +24,13 @@ export class Composer {
 	private readonly textarea: HTMLTextAreaElement;
 	private readonly sendButton: HTMLButtonElement;
 	private readonly addButton: HTMLButtonElement;
+	private readonly autocomplete: NoteAutocomplete;
 	private generating = false;
 
 	constructor(
 		container: HTMLElement,
 		private readonly callbacks: ComposerCallbacks,
+		app: App,
 	) {
 		const root = container.createDiv({ cls: 'obsaide-composer' });
 
@@ -49,7 +54,7 @@ export class Composer {
 				'aria-label': 'Message for Aide',
 			},
 		});
-		this.textarea.addEventListener('input', () => this.autoGrow());
+		this.textarea.addEventListener('input', () => this.onInput());
 		this.textarea.addEventListener('keydown', (event) => this.onKeyDown(event));
 
 		this.sendButton = inputRow.createEl('button', {
@@ -63,6 +68,13 @@ export class Composer {
 		root.createDiv({
 			cls: 'obsaide-hint',
 			text: 'Enter to send · Shift+Enter for a new line',
+		});
+
+		// @note autocomplete
+		this.autocomplete = new NoteAutocomplete({
+			app,
+			onSelect: (attachment) => this.callbacks.onAddNoteAttachment?.(attachment),
+			onClose: () => {},
 		});
 	}
 
@@ -117,9 +129,34 @@ export class Composer {
 				this.callbacks.onRemoveAttachment(attachment.id),
 			);
 		}
+
+		// Update autocomplete with existing note attachments for deduplication
+		const noteAttachments = attachments
+			.filter(
+				(a): a is Attachment & { kind: 'note'; path: string } =>
+					a.kind === 'note' && !!a.path,
+			)
+			.map((a) => ({
+				id: a.id,
+				kind: 'note' as const,
+				path: a.path,
+				title: a.title,
+				role: a.role ?? 'primary',
+			}));
+		this.autocomplete.updateExistingAttachments(noteAttachments);
+	}
+
+	private onInput(): void {
+		this.autoGrow();
+		const cursorPos = this.textarea.selectionStart;
+		this.autocomplete.handleInput(this.textarea, cursorPos);
 	}
 
 	private onKeyDown(event: KeyboardEvent): void {
+		// Let autocomplete handle navigation keys first
+		if (this.autocomplete.handleKeyDown(event)) {
+			return;
+		}
 		if (event.key !== 'Enter') return;
 		// Shift+Enter inserts a newline; every other modifier still sends, which
 		// matches what people expect from a chat box.
@@ -155,5 +192,10 @@ export class Composer {
 		this.textarea.setCssStyles({ height: 'auto' });
 		const height = Math.min(this.textarea.scrollHeight, MAX_TEXTAREA_HEIGHT);
 		this.textarea.setCssStyles({ height: `${height}px` });
+	}
+
+	/** Clean up autocomplete and event listeners. */
+	destroy(): void {
+		this.autocomplete.destroy();
 	}
 }

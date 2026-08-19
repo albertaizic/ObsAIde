@@ -1,7 +1,7 @@
 import { TFile, type App } from 'obsidian';
 import { listFolderNotes } from './collect';
 import { applyContextLimits, formatContextBlock } from './format';
-import type { Attachment, ContextRole, ResolvedAttachment } from './types';
+import type { Attachment, ContextRole, ResolvedAttachment, SectionAttachment } from './types';
 import type { ContextLimits } from './types';
 
 /**
@@ -40,6 +40,20 @@ export async function resolveAttachments(
 			for (const file of listFolderNotes(app, attachment.path ?? '')) {
 				resolved.push(await readNote(app, file, attachment.id, role, attachment.path));
 			}
+			continue;
+		}
+
+		if (attachment.kind === 'section') {
+			const sectionAttach = attachment as SectionAttachment;
+			resolved.push({
+				attachmentId: attachment.id,
+				kind: 'note',
+				role,
+				path: sectionAttach.path,
+				title: sectionAttach.title,
+				content: sectionAttach.content,
+				truncated: false,
+			});
 			continue;
 		}
 
