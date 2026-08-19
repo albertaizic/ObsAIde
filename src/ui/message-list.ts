@@ -12,6 +12,10 @@ export interface MessageListCallbacks {
 	onUseInNote: (message: ConversationMessage) => void;
 	/** Writes straight to the caret the request was made from. */
 	onInsertAtCursor: (message: ConversationMessage) => void;
+	/** Appends the reply to an existing note. */
+	onAppendToNote: (message: ConversationMessage) => void;
+	/** Creates a new note with the reply as content. */
+	onCreateNote: (message: ConversationMessage) => void;
 	/** Whether this reply can currently be written to a note. */
 	canInsert: (message: ConversationMessage) => boolean;
 	/** Shows which notes an attached folder contributed. */
@@ -229,6 +233,14 @@ export class MessageList {
 				this.callbacks.onUseInNote(message);
 			});
 		}
+
+		// Append to note and Create new note are always available for any assistant reply
+		this.iconButton(actions, 'file-plus', 'Append to note…', () => {
+			this.callbacks.onAppendToNote(message);
+		});
+		this.iconButton(actions, 'file-plus-2', 'Create new note…', () => {
+			this.callbacks.onCreateNote(message);
+		});
 
 		if (isLastAssistant) {
 			this.iconButton(actions, 'refresh-cw', 'Regenerate', () =>
