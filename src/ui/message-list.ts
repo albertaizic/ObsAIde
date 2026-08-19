@@ -20,6 +20,8 @@ export interface MessageListCallbacks {
 	canInsert: (message: ConversationMessage) => boolean;
 	/** Shows which notes an attached folder contributed. */
 	onInspectAttachment: (attachment: Attachment) => void;
+	/** Creates a new branch from this message. */
+	onBranchFromMessage: (messageId: string) => void;
 }
 
 interface RenderedMessage {
@@ -247,6 +249,11 @@ export class MessageList {
 				this.callbacks.onRegenerate(),
 			);
 		}
+
+		// Branch from this message (available for any message)
+		this.iconButton(actions, 'git-branch', 'Branch from here', () => {
+			this.callbacks.onBranchFromMessage(message.id);
+		});
 	}
 
 	private iconButton(

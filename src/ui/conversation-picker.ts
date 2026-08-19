@@ -23,10 +23,19 @@ export class ConversationPickerModal extends FuzzySuggestModal<Conversation> {
 	override renderSuggestion(match: FuzzyMatch<Conversation>, el: HTMLElement): void {
 		const conversation = match.item;
 		el.addClass('obsaide-model-suggestion');
-		el.createDiv({
+
+		const titleRow = el.createDiv({ cls: 'obsaide-model-title-row' });
+		titleRow.createDiv({
 			cls: 'obsaide-model-title',
 			text: conversationTitle(conversation),
 		});
+
+		// Show branch indicator
+		if (conversation.parentConversationId) {
+			const branchBadge = titleRow.createSpan({ cls: 'obsaide-branch-badge' });
+			branchBadge.setText('↳ branch');
+		}
+
 		const turns = conversation.messages.filter((m) => m.role === 'user').length;
 		el.createDiv({
 			cls: 'obsaide-model-meta',
