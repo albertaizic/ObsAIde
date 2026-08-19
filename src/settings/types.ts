@@ -1,6 +1,8 @@
 import { getProviderDescriptor } from '../providers/catalog';
 import { isProviderId, PROVIDER_IDS, type ProviderId } from '../providers/types';
 
+export type { ProviderId } from '../providers/types';
+
 /** Per-provider configuration. Stored locally in the plugin's `data.json`. */
 export interface ProviderSettings {
 	/** Whether the provider is offered in the chat provider picker. */
@@ -39,6 +41,30 @@ export interface CustomAction {
 	enabled: boolean;
 }
 
+/** A named, reusable assistant configuration (profile). */
+export interface AssistantProfile {
+	/** Stable unique ID (e.g., 'general', 'tutor', 'custom-123'). */
+	id: string;
+	/** Display name. */
+	name: string;
+	/** Obsidian icon name. */
+	icon: string;
+	/** System prompt instructions for this profile. */
+	instructions: string;
+	/** Optional provider override. If absent, uses global default provider. */
+	providerId?: ProviderId;
+	/** Optional model override. If absent, uses provider's selected model. */
+	model?: string;
+	/** Response length preference. */
+	responseLength: 'short' | 'normal' | 'detailed';
+	/** Whether this profile is available for selection. */
+	enabled: boolean;
+	/** True for built-in profiles (cannot be deleted). */
+	isBuiltIn: boolean;
+	/** Optional default context scope for conversations using this profile. */
+	contextScope?: ContextScope;
+}
+
 export interface ObsAideSettings {
 	schemaVersion: number;
 	defaultProvider: ProviderId;
@@ -51,7 +77,7 @@ export interface ObsAideSettings {
 	maxOutputTokens: number;
 	/** Stream responses when the provider and environment allow it. */
 	streaming: boolean;
-	/** Start new conversations in tutor mode. */
+	/** Start new conversations in tutor mode (legacy, migrated to profile). */
 	tutorModeByDefault: boolean;
 	/** Keep conversation history in the plugin folder between sessions. */
 	persistConversations: boolean;
@@ -65,6 +91,10 @@ export interface ObsAideSettings {
 	customActions: CustomAction[];
 	/** Default context scope for new conversations. */
 	contextScope: ContextScope;
+	/** User-defined assistant profiles. */
+	profiles: AssistantProfile[];
+	/** Currently active profile ID. */
+	activeProfileId?: string;
 }
 
 /**
@@ -78,7 +108,7 @@ export const TEMPERATURE_RANGE = { min: 0, max: 1, step: 0.05 } as const;
 export const MAX_OUTPUT_TOKENS_RANGE = { min: 256, max: 16_000 } as const;
 export const CONTEXT_CHAR_RANGE = { min: 1_000, max: 200_000 } as const;
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 function defaultProviderSettings(id: ProviderId): ProviderSettings {
 	const descriptor = getProviderDescriptor(id);
@@ -112,6 +142,8 @@ export function createDefaultSettings(): ObsAideSettings {
 		responseLength: 'normal',
 		customActions: [],
 		contextScope: 'selection',
+		profiles: [],
+		activeProfileId: 'general',
 	};
 }
 
@@ -241,6 +273,30 @@ export function normalizeSettings(raw: unknown): ObsAideSettings {
 		)
 			? (data['contextScope'] as ContextScope)
 			: defaults.contextScope,
+		profiles: Array.isArray(data['profiles'])
+			? data['profiles'].map((p: unknown) => {
+				const obj = p as Record<string, unknown>;
+				const providerIdRaw = obj['providerId'];
+				const modelRaw = obj['model'];
+				return {
+					id: asString(obj['id'], ''),
+					name: asString(obj['name'], ''),
+					icon: asString(obj['icon'], 'zap'),
+					instructions: asString(obj['instructions'], ''),
+					providerId: providerIdRaw && isProviderId(providerIdRaw) ? providerIdRaw : undefined,
+					model: typeof modelRaw === 'string' ? modelRaw : undefined,
+					responseLength: (['short', 'normal', 'detailed'] as const).includes(
+						obj['responseLength'] as 'short' | 'normal' | 'detailed',
+					)
+						? (obj['responseLength'] as 'short' | 'normal' | 'detailed')
+						: 'normal',
+					enabled: asBoolean(obj['enabled'], true),
+					isBuiltIn: asBoolean(obj['isBuiltIn'], false),
+					contextScope: obj['contextScope'] ? asString(obj['contextScope'], '') as ContextScope : undefined,
+				};
+			})
+			: defaults.profiles,
+		activeProfileId: asString(data['activeProfileId'], defaults.activeProfileId || ''),
 	};
 }
 
@@ -291,7 +347,9 @@ export function needsMigration(raw: unknown, normalized: ObsAideSettings): boole
 		data['temperature'] !== normalized.temperature ||
 		data['maxOutputTokens'] !== normalized.maxOutputTokens ||
 		data['responseLength'] !== normalized.responseLength ||
-		!Array.isArray(data['customActions'])
+		!Array.isArray(data['customActions']) ||
+		!Array.isArray(data['profiles']) ||
+		data['activeProfileId'] !== normalized.activeProfileId
 	);
 }
 

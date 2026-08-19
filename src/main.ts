@@ -14,6 +14,7 @@ import {
 	normalizeSettings,
 	type ObsAideSettings,
 } from './settings/types';
+import { ProfileRegistry, migrateTutorMode } from './settings/profiles';
 import { AideChatView } from './ui/chat-view';
 import { InlineAideMenu } from './ui/inline-menu';
 
@@ -29,6 +30,7 @@ export default class ObsAidePlugin extends Plugin {
 	providers!: ProviderService;
 	conversations!: ConversationStore;
 	chat!: ChatController;
+	profiles!: ProfileRegistry;
 	/** Runtime-only map from reply to the editor it was generated from. */
 	readonly editTargets = new EditTargetRegistry();
 	/** Inline menu for selected text. */
@@ -42,6 +44,18 @@ export default class ObsAidePlugin extends Plugin {
 		// rather than leaving the old value to be sent invisibly.
 		if (needsMigration(stored, this.settings)) await this.saveData(this.settings);
 		this.providers = new ProviderService(() => this.settings, new ObsidianHttpClient());
+
+		this.profiles = new ProfileRegistry(
+			() => this.settings,
+			() => this.saveSettings(),
+		);
+
+		// Migrate old tutorModeByDefault to profile system
+		const migration = migrateTutorMode(this.settings);
+		if (migration.activeProfileId) {
+			this.settings.activeProfileId = migration.activeProfileId;
+			await this.saveSettings();
+		}
 
 		this.conversations = new ConversationStore(createConversationStorage(this), {
 			isPersistenceEnabled: () => this.settings.persistConversations,
