@@ -18,21 +18,25 @@ export interface QuizNoteOptions {
 	folderPath: string;
 	/** Context attachments to base the quiz on. */
 	attachments: Attachment[];
+	/** Whether the modal is in loading state. */
+	isLoading?: boolean;
 }
 
 /** Modal for configuring and creating a quiz note. */
 export class QuizNoteModal extends Modal {
-	private readonly onSubmit: (options: QuizNoteOptions) => void;
+	private readonly onSubmit: (options: QuizNoteOptions) => void | Promise<void>;
 	private readonly attachments: Attachment[];
 	private folderPath = '';
 	private folderName = '';
 	private name = '';
 	private folderButton!: HTMLButtonElement;
+	private createButton!: HTMLButtonElement;
+	private isLoading = false;
 
 	constructor(
 		app: App,
 		attachments: Attachment[],
-		onSubmit: (options: QuizNoteOptions) => void,
+		onSubmit: (options: QuizNoteOptions) => void | Promise<void>,
 	) {
 		super(app);
 		this.attachments = attachments;
@@ -53,10 +57,32 @@ export class QuizNoteModal extends Modal {
 		const header = contentEl.createDiv({ cls: 'obsaide-quiz-note-header' });
 		header.createEl('h3', { text: 'Create quiz note' });
 
-		// Number of questions
-		new Setting(contentEl)
+		// Context section
+		if (this.attachments.length > 0) {
+			const contextSection = contentEl.createDiv({ cls: 'obsaide-quiz-note-section' });
+			new Setting(contextSection)
+				.setName('Context')
+				.setDesc(`${this.attachments.length} attachment${this.attachments.length === 1 ? '' : 's'} will be used as source material`)
+				.setHeading();
+
+			for (const attachment of this.attachments) {
+				new Setting(contextSection)
+					.setName(attachment.title)
+					.setDesc(attachment.path ?? attachment.kind)
+					.setClass('obsaide-quiz-note-attachment');
+			}
+		}
+
+		// Questions section
+		const questionsSection = contentEl.createDiv({ cls: 'obsaide-quiz-note-section' });
+		new Setting(questionsSection)
 			.setName('Questions')
 			.setDesc('How many questions should the quiz have?')
+			.setHeading();
+
+		new Setting(questionsSection)
+			.setName('Count')
+			.setDesc('Number of questions to generate')
 			.addDropdown((dropdown) => {
 				for (const [value, label] of [
 					['5', '5'],
@@ -72,8 +98,7 @@ export class QuizNoteModal extends Modal {
 				});
 			});
 
-		// Difficulty
-		new Setting(contentEl)
+		new Setting(questionsSection)
 			.setName('Difficulty')
 			.setDesc('What level of questions should be generated?')
 			.addDropdown((dropdown) => {
@@ -91,8 +116,7 @@ export class QuizNoteModal extends Modal {
 				});
 			});
 
-		// Type
-		new Setting(contentEl)
+		new Setting(questionsSection)
 			.setName('Type')
 			.setDesc('What question format?')
 			.addDropdown((dropdown) => {
@@ -109,10 +133,16 @@ export class QuizNoteModal extends Modal {
 				});
 			});
 
-		// Include answer key
-		new Setting(contentEl)
+		// Output section
+		const outputSection = contentEl.createDiv({ cls: 'obsaide-quiz-note-section' });
+		new Setting(outputSection)
+			.setName('Output')
+			.setDesc('Quiz output options')
+			.setHeading();
+
+		new Setting(outputSection)
 			.setName('Include answer key')
-			.setDesc('Append an answer key section at the end of the note.')
+			.setDesc('Append an answer key section at the end of the note')
 			.addToggle((toggle) => {
 				toggle.setValue(true);
 				toggle.onChange((value) => {
@@ -120,19 +150,27 @@ export class QuizNoteModal extends Modal {
 				});
 			});
 
-		// Note name
-		new Setting(contentEl)
-			.setName('Name')
+		// Note details section
+		const detailsSection = contentEl.createDiv({ cls: 'obsaide-quiz-note-section' });
+		new Setting(detailsSection)
+			.setName('Note details')
+			.setDesc('Where to save the quiz note')
+			.setHeading();
+
+		new Setting(detailsSection)
+			.setName('Note name')
 			.setDesc('Name for the quiz note (without .md extension)')
 			.addText((text) => {
 				text.setPlaceholder('Binary search quiz');
 				text.onChange((value) => {
 					this.name = value.trim();
 				});
+				// Set initial value
+				text.inputEl.value = this.name;
 			});
 
 		// Folder picker
-		const folderSetting = new Setting(contentEl)
+		const folderSetting = new Setting(detailsSection)
 			.setName('Folder')
 			.setDesc('Destination folder for the quiz note');
 
@@ -142,22 +180,16 @@ export class QuizNoteModal extends Modal {
 		});
 		this.folderButton.addEventListener('click', () => this.openFolderPicker());
 
-		// Context preview
-		if (this.attachments.length > 0) {
-			const contextInfo = contentEl.createDiv({ cls: 'obsaide-quiz-note-context' });
-			contextInfo.createEl('p', {
-				cls: 'setting-item-description',
-				text: `Using ${this.attachments.length} attachment${this.attachments.length === 1 ? '' : 's'} as context`,
-			});
-		}
+		// Loading state indicator
+		this.loadingIndicator = contentEl.createDiv({ cls: 'obsaide-quiz-note-loading is-hidden' });
 
 		// Buttons
 		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
-		const createButton = buttons.createEl('button', {
+		this.createButton = buttons.createEl('button', {
 			cls: 'obsaide-button is-cta',
 			text: 'Create quiz note',
 		});
-		createButton.addEventListener('click', () => this.handleCreate());
+		this.createButton.addEventListener('click', () => this.handleCreate());
 
 		buttons.createEl('button', {
 			cls: 'obsaide-button',
@@ -169,6 +201,7 @@ export class QuizNoteModal extends Modal {
 	private difficulty: QuizNoteOptions['difficulty'] = 'mixed';
 	private type: QuizNoteOptions['type'] = 'mixed';
 	private includeAnswerKey = true;
+	private loadingIndicator!: HTMLElement;
 
 	private openFolderPicker(): void {
 		new FolderPickerModal(this.app, (folder: TFolder) => {
@@ -176,6 +209,19 @@ export class QuizNoteModal extends Modal {
 			this.folderName = folder.path === '' ? '/' : folder.path;
 			this.folderButton.setText(this.folderName);
 		}).open();
+	}
+
+	/** Set loading state - call from outside to show/hide loading */
+	setLoading(loading: boolean): void {
+		this.isLoading = loading;
+		this.createButton.disabled = loading;
+		this.createButton.setText(loading ? 'Creating quiz…' : 'Create quiz note');
+		this.loadingIndicator.toggleClass('is-hidden', !loading);
+		if (loading) {
+			this.loadingIndicator.empty();
+			this.loadingIndicator.createDiv({ cls: 'obsaide-spinner' });
+			this.loadingIndicator.createSpan({ text: 'Generating quiz…' });
+		}
 	}
 
 	private handleCreate(): void {
@@ -187,6 +233,7 @@ export class QuizNoteModal extends Modal {
 			new Notice('Add some note context before creating a quiz.');
 			return;
 		}
+		if (this.isLoading) return; // Prevent duplicate submissions
 
 		const options: QuizNoteOptions = {
 			questionCount: this.questionCount,
@@ -196,10 +243,11 @@ export class QuizNoteModal extends Modal {
 			name: this.name,
 			folderPath: this.folderPath,
 			attachments: this.attachments,
+			isLoading: true,
 		};
 
-		this.close();
-		this.onSubmit(options);
+		this.setLoading(true);
+		void this.onSubmit(options);
 	}
 
 	override onClose(): void {

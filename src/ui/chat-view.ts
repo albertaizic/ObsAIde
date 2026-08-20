@@ -21,7 +21,7 @@ import {
 import { AIDE_ACTIONS } from '../actions/registry';
 import { describeCustomActionAvailability, runAction, runCustomAction } from '../actions/runner';
 import type { ChatController, SendRequest } from '../chat/controller';
-import { isEmptyConversation, type Conversation, type ConversationMessage } from '../chat/conversation';
+import { isEmptyConversation, conversationTitle, type Conversation, type ConversationMessage } from '../chat/conversation';
 import { buildConversationExportContent, sanitizeExportName, type ConversationExportMode as ExportMode } from '../chat/export';
 import { buildContextBlock } from '../context/resolve';
 import {
@@ -49,7 +49,6 @@ import { EditPreviewModal } from './edit-preview';
 import { FolderPickerModal } from './folder-picker';
 import { LinkedNotesModal } from './linked-notes-modal';
 import { MessageList } from './message-list';
-import { ModelPickerModal } from './model-picker';
 import { NotePickerModal } from './note-picker';
 import { PromptModal } from './prompt-modal';
 import { QuizNoteModal, type QuizNoteOptions } from './quiz-note-modal';
@@ -66,13 +65,13 @@ export class AideChatView extends ItemView {
 	private messageList!: MessageList;
 	private composer!: Composer;
 	private scroller!: BottomScroller;
-	private providerButton!: HTMLButtonElement;
-	private modelButton!: HTMLButtonElement;
 	private profileButton!: HTMLButtonElement;
+	private providerModelButton!: HTMLButtonElement;
 	private modeBadge!: HTMLElement;
 	private scrollerEl!: HTMLElement;
 	private flowEl!: HTMLElement;
 	private jumpButton!: HTMLButtonElement;
+	private conversationTitleEl!: HTMLElement;
 
 	private attachments: Attachment[] = [];
 	private unsubscribe: (() => void) | null = null;
@@ -262,20 +261,13 @@ export class AideChatView extends ItemView {
 	private buildHeader(root: HTMLElement): void {
 		const header = root.createDiv({ cls: 'obsaide-header' });
 
-		const selectors = header.createDiv({ cls: 'obsaide-selectors' });
-		this.providerButton = selectors.createEl('button', { cls: 'obsaide-select' });
-		this.providerButton.addEventListener('click', () => this.showProviderMenu());
-		this.modelButton = selectors.createEl('button', { cls: 'obsaide-select is-model' });
-		this.modelButton.addEventListener('click', () => this.openModelPicker());
+		// Row 1: Title + primary actions
+		const titleRow = header.createDiv({ cls: 'obsaide-header-title-row' });
+		titleRow.createEl('h2', { cls: 'obsaide-header-title', text: ASSISTANT_NAME });
 
-		// Profile selector
-		this.profileButton = selectors.createEl('button', { cls: 'obsaide-select is-profile' });
-		this.profileButton.addEventListener('click', () => this.showProfileMenu());
+		const titleActions = titleRow.createDiv({ cls: 'obsaide-header-title-actions' });
 
-		const actions = header.createDiv({ cls: 'obsaide-header-actions' });
-		this.modeBadge = actions.createSpan({ cls: 'obsaide-mode-badge', text: 'Tutor' });
-
-		const newChat = actions.createEl('button', {
+		const newChat = titleActions.createEl('button', {
 			cls: 'obsaide-icon-button',
 			attr: { 'aria-label': 'New conversation' },
 		});
@@ -283,13 +275,39 @@ export class AideChatView extends ItemView {
 		setTooltip(newChat, 'New conversation');
 		newChat.addEventListener('click', () => this.controller.newConversation());
 
-		const more = actions.createEl('button', {
+		const historyBtn = titleActions.createEl('button', {
+			cls: 'obsaide-icon-button',
+			attr: { 'aria-label': 'Recent conversations' },
+		});
+		setIcon(historyBtn, 'history');
+		setTooltip(historyBtn, 'Recent conversations');
+		historyBtn.addEventListener('click', () => this.openConversationPicker());
+
+		const more = titleActions.createEl('button', {
 			cls: 'obsaide-icon-button',
 			attr: { 'aria-label': 'More options' },
 		});
 		setIcon(more, 'more-vertical');
 		setTooltip(more, 'More options');
 		more.addEventListener('click', (event) => this.showOverflowMenu(event));
+
+		// Conversation title (shows when not empty)
+		this.conversationTitleEl = header.createDiv({ cls: 'obsaide-conversation-title' });
+		this.conversationTitleEl.setAttribute('aria-live', 'polite');
+
+		// Row 2: Profile + Provider/Model compact row
+		const runtimeRow = header.createDiv({ cls: 'obsaide-header-runtime' });
+
+		// Profile selector
+		this.profileButton = runtimeRow.createEl('button', { cls: 'obsaide-select is-profile' });
+		this.profileButton.addEventListener('click', () => this.showProfileMenu());
+
+		// Provider/Model combined selector
+		this.providerModelButton = runtimeRow.createEl('button', { cls: 'obsaide-select is-provider-model' });
+		this.providerModelButton.addEventListener('click', () => { void this.showProviderModelMenu(); });
+
+		// Mode badge (tutor mode indicator)
+		this.modeBadge = runtimeRow.createSpan({ cls: 'obsaide-mode-badge', text: 'Tutor' });
 	}
 
 	// --- note insertion ------------------------------------------------------
@@ -392,50 +410,6 @@ export class AideChatView extends ItemView {
 
 	// --- menus ---------------------------------------------------------------
 
-	private showProviderMenu(): void {
-		const settings = this.plugin.settings;
-		const menu = new Menu();
-		const available = this.plugin.providers.availableProviders();
-
-		if (available.length === 0) {
-			menu.addItem((item) => item.setTitle('No providers enabled').setDisabled(true));
-		}
-		for (const id of available) {
-			const configured = isProviderConfigured(settings, id);
-			menu.addItem((item) =>
-				item
-					.setTitle(
-						configured
-							? this.plugin.providers.label(id)
-							: `${this.plugin.providers.label(id)} — not configured`,
-					)
-					.setChecked(id === settings.defaultProvider)
-					.onClick(() => void this.controller.setProvider(id)),
-			);
-		}
-		menu.addSeparator();
-		menu.addItem((item) =>
-			item
-				.setTitle('Configure providers…')
-				.setIcon('settings')
-				.onClick(() => this.plugin.openSettings()),
-		);
-
-		const rect = this.providerButton.getBoundingClientRect();
-		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
-	}
-
-	private openModelPicker(): void {
-		const providerId = this.controller.providerId;
-		new ModelPickerModal(
-			this.app,
-			this.plugin.providers,
-			providerId,
-			this.controller.model,
-			(model) => void this.controller.setModel(model),
-		).open();
-	}
-
 	private updateProfileButton(): void {
 		const activeProfile = this.plugin.profiles.getActive();
 		this.profileButton.setText(activeProfile.name);
@@ -459,15 +433,71 @@ export class AideChatView extends ItemView {
 			);
 		}
 
+		const rect = this.profileButton.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+	}
+
+	private async showProviderModelMenu(): Promise<void> {
+		const menu = new Menu();
+		const settings = this.plugin.settings;
+		const available = this.plugin.providers.availableProviders();
+
+		// Provider section
+		if (available.length === 0) {
+			menu.addItem((item) => item.setTitle('No providers enabled').setDisabled(true));
+		} else {
+			menu.addItem((item) => item.setTitle('Provider').setDisabled(true));
+			for (const id of available) {
+				const configured = isProviderConfigured(settings, id);
+				menu.addItem((item) =>
+					item
+						.setTitle(
+							configured
+								? this.plugin.providers.label(id)
+								: `${this.plugin.providers.label(id)} — not configured`,
+						)
+						.setChecked(id === settings.defaultProvider)
+						.onClick(() => void this.controller.setProvider(id)),
+				);
+			}
+		}
+
+		menu.addSeparator();
+
+		// Model section (for current provider)
+		menu.addItem((item) => item.setTitle('Model').setDisabled(true));
+		const providerId = this.controller.providerId;
+		const currentModel = this.controller.model;
+
+		try {
+			const modelInfos = await this.plugin.providers.listModels(providerId);
+			const models = modelInfos.map(m => m.id);
+
+			for (const model of models) {
+				menu.addItem((item) =>
+					item
+						.setTitle(model)
+						.setChecked(model === currentModel)
+						.onClick(() => void this.controller.setModel(model)),
+				);
+			}
+
+			if (models.length === 0) {
+				menu.addItem((item) => item.setTitle('No models available').setDisabled(true));
+			}
+		} catch {
+			menu.addItem((item) => item.setTitle('Failed to load models').setDisabled(true));
+		}
+
 		menu.addSeparator();
 		menu.addItem((item) =>
 			item
-				.setTitle('Manage profiles…')
+				.setTitle('Configure providers…')
 				.setIcon('settings')
 				.onClick(() => this.plugin.openSettings()),
 		);
 
-		const rect = this.profileButton.getBoundingClientRect();
+		const rect = this.providerModelButton.getBoundingClientRect();
 		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
 	}
 
@@ -660,7 +690,7 @@ export class AideChatView extends ItemView {
 			item
 				.setTitle('Suggest wikilinks…')
 				.setIcon('link-2')
-				.setDisabled(this.controller.isGenerating || this.attachments.length === 0)
+				.setDisabled(this.controller.isGenerating)
 				.onClick(() => this.openWikilinkSuggestions()),
 		);
 		menu.addSeparator();
@@ -701,23 +731,39 @@ export class AideChatView extends ItemView {
 		}
 		new ConversationPickerModal(this.app, {
 			conversations,
-			onChoose: (conversation) => this.controller.openConversation(conversation.id),
+			onChoose: (conversation) => {
+				// Empty conversation object signals "new conversation"
+				if (!conversation.id) {
+					this.controller.newConversation();
+				} else {
+					this.controller.openConversation(conversation.id);
+				}
+			},
 			onDelete: (id) => this.controller.deleteConversation(id),
+			onRename: (id, newTitle) => this.controller.renameConversation(id, newTitle),
+			onBranch: (id) => this.controller.branchFromConversation(id),
 			currentConversationId: this.controller.current.id,
 		}).open();
 	}
 
 	private openQuizNoteSetup(): void {
-		new QuizNoteModal(this.app, this.attachments, (options) =>
-			void this.generateQuizNote(options),
-		).open();
+		const modal = new QuizNoteModal(this.app, this.attachments, async (options) => {
+			const success = await this.generateQuizNote(options);
+			if (success) {
+				modal.close();
+			} else {
+				// Re-enable the modal controls on failure
+				modal.setLoading(false);
+			}
+		});
+		modal.open();
 	}
 
 	private async openWikilinkSuggestions(): Promise<void> {
 		// Get the active file
 		const activeFile = this.app.workspace.getActiveFile();
 		if (!activeFile) {
-			new Notice('No active note to suggest wikilinks for.');
+			new Notice('Open a Markdown note to suggest wikilinks.');
 			return;
 		}
 
@@ -736,35 +782,47 @@ export class AideChatView extends ItemView {
 			}
 		}
 
+		if (!sourceText.trim()) {
+			new Notice('The note is empty.');
+			return;
+		}
+
 		await this.showWikilinkSuggestions(activeFile, sourceText);
 	}
 
 	private async showWikilinkSuggestions(file: TFile, sourceText: string): Promise<void> {
-		// Discover candidates from the vault
-		const candidates = await discoverCandidates(this.app, sourceText);
-		if (candidates.length === 0) {
-			new Notice('No wikilink candidates found.');
-			return;
+		// Show loading notice immediately
+		new Notice('Finding wikilinks…');
+
+		try {
+			// Discover candidates from the vault
+			const candidates = await discoverCandidates(this.app, sourceText);
+			if (candidates.length === 0) {
+				new Notice('No matching notes found in the vault.');
+				return;
+			}
+
+			// Filter out already linked notes
+			const filteredCandidates = filterExistingLinks(candidates, sourceText);
+
+			// Generate suggestions
+			const suggestions = generateSuggestions(sourceText, filteredCandidates);
+			if (suggestions.length === 0) {
+				new Notice('No useful wikilinks found.');
+				return;
+			}
+
+			// Show the modal
+			const modal = new WikilinkSuggestionsModal(this.app, {
+				sourceText,
+				file,
+				onApply: (newText) => void this.applyWikilinks(file, newText),
+			});
+			modal.setSuggestions(suggestions);
+			modal.open();
+		} catch (error) {
+			new Notice('Wikilink suggestion failed: ' + String(error));
 		}
-
-		// Filter out already linked notes
-		const filteredCandidates = filterExistingLinks(candidates, sourceText);
-
-		// Generate suggestions
-		const suggestions = generateSuggestions(sourceText, filteredCandidates);
-		if (suggestions.length === 0) {
-			new Notice('No wikilink suggestions for this text.');
-			return;
-		}
-
-		// Show the modal
-		const modal = new WikilinkSuggestionsModal(this.app, {
-			sourceText,
-			file,
-			onApply: (newText) => void this.applyWikilinks(file, newText),
-		});
-		modal.setSuggestions(suggestions);
-		modal.open();
 	}
 
 	private async applyWikilinks(file: TFile, newText: string): Promise<void> {
@@ -978,22 +1036,24 @@ export class AideChatView extends ItemView {
 		const providerId = this.controller.providerId;
 		const configured = isProviderConfigured(this.plugin.settings, providerId);
 		const label = this.plugin.providers.label(providerId);
-
-		this.providerButton.setText(label);
-		setTooltip(this.providerButton, `Provider: ${label}. Select to change.`);
-		this.providerButton.toggleClass('is-unconfigured', !configured);
-
 		const model = this.controller.model || 'Choose a model';
-		this.modelButton.setText(summarize(model, 28));
-		setTooltip(this.modelButton, `Model: ${model}. Select to change.`);
 
-		// Update composer controls
-		const settings = this.controller.getSettings();
-		this.composer.setLength(settings.responseLength ?? 'normal');
-		this.composer.setScope(settings.contextScope ?? 'selection');
+		// Update conversation title
+		const conversation = this.controller.current;
+		const title = conversationTitle(conversation);
+		this.conversationTitleEl.setText(title || 'New conversation');
+		this.conversationTitleEl.toggleClass('is-empty', !title);
+
+		// Update profile button
 		this.updateProfileButton();
 
-		this.modeBadge.toggleClass('is-visible', this.controller.current.mode === 'tutor');
+		// Update combined provider/model button
+		const modelShort = summarize(model, 20);
+		this.providerModelButton.setText(`${label} · ${modelShort}`);
+		setTooltip(this.providerModelButton, `Provider: ${label}\nModel: ${model}. Click to change.`);
+		this.providerModelButton.toggleClass('is-unconfigured', !configured);
+
+		this.modeBadge.toggleClass('is-visible', conversation.mode === 'tutor');
 	}
 
 	private renderEmptyState(parent: HTMLElement): void {
@@ -1047,8 +1107,9 @@ export class AideChatView extends ItemView {
 
 	/**
 	 * Generate a quiz note from the current context and create it as a Markdown file.
+	 * Returns true on success, false on failure.
 	 */
-	private async generateQuizNote(options: QuizNoteOptions): Promise<void> {
+	private async generateQuizNote(options: QuizNoteOptions): Promise<boolean> {
 		const settings = this.controller.getSettings();
 		const providerId = settings.defaultProvider;
 		const model = settings.providers[providerId].model;
@@ -1065,7 +1126,7 @@ export class AideChatView extends ItemView {
 
 		if (!contextBlock) {
 			new Notice('No context available for quiz generation.');
-			return;
+			return false;
 		}
 
 		// Build the system prompt
@@ -1086,9 +1147,6 @@ export class AideChatView extends ItemView {
 
 		const userPrompt = `${contextBlock}\n\nGenerate a study quiz based ONLY on the provided context.\n\nRequirements:\n- ${options.questionCount} questions\n- ${difficultyInstruction}\n- ${typeInstruction}\n- ${answerKeyInstruction}\n- Use clear Markdown formatting\n- Ground every question in the provided context — do not invent material\n- If the context is insufficient for a question, skip that topic\n\nOutput only the quiz as Markdown.`;
 
-		// Show a notice while generating
-		new Notice('Generating quiz…');
-
 		try {
 			const result = await this.plugin.providers.complete({
 				providerId,
@@ -1100,7 +1158,7 @@ export class AideChatView extends ItemView {
 			const quizContent = result.text.trim();
 			if (!quizContent) {
 				new Notice('Quiz generation returned empty content.');
-				return;
+				return false;
 			}
 
 			// Add frontmatter
@@ -1126,8 +1184,10 @@ export class AideChatView extends ItemView {
 			new Notice(`Created quiz: ${file.basename}`);
 			const leaf = this.app.workspace.getLeaf(false);
 			if (leaf) await leaf.openFile(file);
+			return true;
 		} catch (error) {
 			new Notice('Quiz generation failed: ' + String(error));
+			return false;
 		}
 	}
 
