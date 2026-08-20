@@ -3,7 +3,9 @@ import {
 	conversationTitle,
 	createConversation,
 	createMessage,
+	getRootConversationTitle,
 	isEmptyConversation,
+	migrateBranchTitles,
 	toProviderMessages,
 } from './conversation';
 
@@ -55,5 +57,58 @@ describe('toProviderMessages', () => {
 			{ role: 'user', content: 'first' },
 			{ role: 'user', content: 'second' },
 		]);
+	});
+});
+
+describe('branch title handling', () => {
+	it('getRootConversationTitle strips old branch suffix', () => {
+		const conversation = createConversation('chat');
+		conversation.title = 'My Topic — Branch';
+		expect(getRootConversationTitle(conversation)).toBe('My Topic');
+	});
+
+	it('getRootConversationTitle strips new branch suffix', () => {
+		const conversation = createConversation('chat');
+		conversation.title = 'My Topic · Branch';
+		expect(getRootConversationTitle(conversation)).toBe('My Topic');
+	});
+
+	it('getRootConversationTitle handles compounded branch suffixes', () => {
+		const conversation = createConversation('chat');
+		conversation.title = 'My Topic — Branch — Branch — Branch';
+		expect(getRootConversationTitle(conversation)).toBe('My Topic');
+	});
+
+	it('getRootConversationTitle leaves clean titles unchanged', () => {
+		const conversation = createConversation('chat');
+		conversation.title = 'Clean Title';
+		expect(getRootConversationTitle(conversation)).toBe('Clean Title');
+	});
+
+	it('migrateBranchTitles cleans compounded titles', () => {
+		const conversations = [
+			createConversation('chat'),
+			createConversation('chat'),
+		];
+		conversations[0].title = 'Topic — Branch — Branch';
+		conversations[1].title = 'Clean Topic';
+
+		const migrated = migrateBranchTitles(conversations);
+		expect(migrated).toBe(1);
+		expect(conversations[0].title).toBe('Topic');
+		expect(conversations[1].title).toBe('Clean Topic');
+	});
+
+	it('migrateBranchTitles handles mixed old and new formats', () => {
+		const conversations = [
+			createConversation('chat'),
+			createConversation('chat'),
+		];
+		conversations[0].title = 'Old — Branch';
+		conversations[1].title = 'New · Branch';
+
+		migrateBranchTitles(conversations);
+		expect(conversations[0].title).toBe('Old');
+		expect(conversations[1].title).toBe('New');
 	});
 });

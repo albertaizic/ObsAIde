@@ -152,10 +152,17 @@ export function createBranch(
 export function getRootConversationTitle(conversation: Conversation): string {
 	const title = conversationTitle(conversation);
 	// Strip existing branch suffixes (both old " — Branch" and new " · Branch" formats)
-	return title
-		.replace(/\s*—\s*Branch\s*$/, '')
-		.replace(/\s*·\s*Branch\s*$/, '')
-		.trim();
+	// Use a loop to handle compounded suffixes like "Title — Branch — Branch — Branch"
+	let cleaned = title;
+	let previous;
+	do {
+		previous = cleaned;
+		cleaned = cleaned
+			.replace(/\s*—\s*Branch\s*$/, '')
+			.replace(/\s*·\s*Branch\s*$/, '')
+			.trim();
+	} while (cleaned !== previous);
+	return cleaned;
 }
 
 /** Migration: clean up existing conversation titles that have compounded branch suffixes. */
