@@ -1,5 +1,5 @@
 import type { AideMode } from '../prompts/system';
-import { createConversation, type Conversation, type ConversationMessage } from './conversation';
+import { createConversation, type Conversation, type ConversationMessage, migrateBranchTitles } from './conversation';
 
 /**
  * Persistence is deliberately behind a tiny interface: the store itself is
@@ -81,6 +81,10 @@ export class ConversationStore {
 		const file = raw as Partial<StoredFile> | undefined;
 		const list = Array.isArray(file?.conversations) ? file.conversations : [];
 		this.conversations = list.filter(isConversation).slice(0, this.limit);
+		// Migration: clean up compounded branch titles
+		if (this.conversations.length > 0) {
+			migrateBranchTitles(this.conversations);
+		}
 	}
 
 	list(): Conversation[] {

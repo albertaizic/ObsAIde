@@ -137,8 +137,37 @@ export function createBranch(
 	branch.messages = parent.messages.slice(0, messageIndex + 1).map(msg => ({ ...msg }));
 	branch.parentConversationId = parent.id;
 	branch.branchedFromMessageId = branchedFromMessageId;
-	branch.branchName = `${conversationTitle(parent)} — Branch`;
+	// Use a clean branch indicator that doesn't compound when branching a branch
+	const rootTitle = getRootConversationTitle(parent);
+	branch.branchName = `${rootTitle} · Branch`;
 	branch.title = branch.branchName;
 
 	return branch;
+}
+
+/**
+ * Get the root conversation title, stripping any existing branch indicators.
+ * This prevents "Title — Branch — Branch — Branch" when branching a branch.
+ */
+export function getRootConversationTitle(conversation: Conversation): string {
+	const title = conversationTitle(conversation);
+	// Strip existing branch suffixes (both old " — Branch" and new " · Branch" formats)
+	return title
+		.replace(/\s*—\s*Branch\s*$/, '')
+		.replace(/\s*·\s*Branch\s*$/, '')
+		.trim();
+}
+
+/** Migration: clean up existing conversation titles that have compounded branch suffixes. */
+export function migrateBranchTitles(conversations: Conversation[]): number {
+	let migrated = 0;
+	for (const conversation of conversations) {
+		const originalTitle = conversation.title;
+		const cleanedTitle = getRootConversationTitle(conversation);
+		if (originalTitle !== cleanedTitle) {
+			conversation.title = cleanedTitle;
+			migrated++;
+		}
+	}
+	return migrated;
 }

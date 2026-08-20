@@ -1,4 +1,4 @@
-import { Modal, type App, setIcon } from 'obsidian';
+import { Menu, Modal, type App, setIcon } from 'obsidian';
 import { conversationTitle, type Conversation } from '../chat/conversation';
 
 /** Options for the conversation picker modal. */
@@ -6,6 +6,8 @@ export interface ConversationPickerOptions {
 	conversations: Conversation[];
 	onChoose: (conversation: Conversation) => void;
 	onDelete?: (id: string) => void;
+	onRename?: (id: string, newTitle: string) => void;
+	onBranch?: (id: string) => void;
 	currentConversationId?: string;
 }
 
@@ -14,6 +16,8 @@ export class ConversationPickerModal extends Modal {
 	private readonly conversations: Conversation[];
 	private readonly onChoose: (conversation: Conversation) => void;
 	private readonly onDelete: ((id: string) => void) | undefined;
+	private readonly onRename: ((id: string, newTitle: string) => void) | undefined;
+	private readonly onBranch: ((id: string) => void) | undefined;
 	private readonly currentConversationId: string | undefined;
 	private filter = '';
 	private filteredConversations: Conversation[] = [];
@@ -23,6 +27,8 @@ export class ConversationPickerModal extends Modal {
 		this.conversations = options.conversations;
 		this.onChoose = options.onChoose;
 		this.onDelete = options.onDelete;
+		this.onRename = options.onRename;
+		this.onBranch = options.onBranch;
 		this.currentConversationId = options.currentConversationId;
 		this.filteredConversations = this.conversations;
 	}
@@ -32,9 +38,21 @@ export class ConversationPickerModal extends Modal {
 		contentEl.empty();
 		contentEl.addClass('obsaide-conversation-picker-modal');
 
-		// Header with search
+		// Header with search and new conversation
 		const header = contentEl.createDiv({ cls: 'obsaide-conversation-picker-header' });
-		header.createEl('h3', { text: 'Recent conversations' });
+
+		const headerRow = header.createDiv({ cls: 'obsaide-picker-header-row' });
+		headerRow.createEl('h3', { text: 'Recent conversations' });
+
+		const newChatBtn = headerRow.createEl('button', {
+			cls: 'obsaide-icon-button is-small',
+			attr: { 'aria-label': 'New conversation' },
+		});
+		setIcon(newChatBtn, 'plus');
+		newChatBtn.addEventListener('click', () => {
+			this.close();
+			this.onChoose({} as Conversation); // Signal new conversation via special handling
+		});
 
 		const searchContainer = header.createDiv({ cls: 'obsaide-conversation-search' });
 		const searchIcon = searchContainer.createSpan({ cls: 'obsaide-search-icon' });
@@ -87,27 +105,34 @@ export class ConversationPickerModal extends Modal {
 		const item = this.listContainer.createDiv({ cls: 'obsaide-conversation-item' });
 		item.dataset.id = conversation.id;
 
+		// Check if this is the current conversation
+		const isCurrent = conversation.id === this.currentConversationId;
+
 		// Main content (clickable to open)
 		const main = item.createDiv({ cls: 'obsaide-conversation-main' });
 
 		const titleRow = main.createDiv({ cls: 'obsaide-conversation-title-row' });
+
+		// Conversation title - use branchName if available for branches, otherwise title
+		const displayTitle = conversation.branchName || conversationTitle(conversation);
 		titleRow.createDiv({
 			cls: 'obsaide-conversation-title',
-			text: conversationTitle(conversation),
+			text: displayTitle,
 		});
 
-		// Show branch indicator
+		// Show branch indicator for branches
 		if (conversation.parentConversationId) {
 			const branchBadge = titleRow.createSpan({ cls: 'obsaide-branch-badge' });
 			branchBadge.setText('↳ branch');
 		}
 
 		// Show current conversation indicator
-		if (conversation.id === this.currentConversationId) {
+		if (isCurrent) {
 			const currentBadge = titleRow.createSpan({ cls: 'obsaide-current-badge' });
 			currentBadge.setText('Current');
 		}
 
+		// Metadata
 		const turns = conversation.messages.filter((m) => m.role === 'user').length;
 		main.createDiv({
 			cls: 'obsaide-conversation-meta',
@@ -120,16 +145,16 @@ export class ConversationPickerModal extends Modal {
 			this.close();
 		});
 
-		// Delete button (show on hover or always for touch)
+		// Overflow menu button (⋯) - shows on hover
 		const actions = item.createDiv({ cls: 'obsaide-conversation-actions' });
-		const deleteBtn = actions.createEl('button', {
-			cls: 'obsaide-conversation-delete',
-			attr: { 'aria-label': 'Delete conversation' },
+		const menuBtn = actions.createEl('button', {
+			cls: 'obsaide-conversation-menu',
+			attr: { 'aria-label': 'More options' },
 		});
-		setIcon(deleteBtn, 'trash-2');
-		deleteBtn.addEventListener('click', (e) => {
+		setIcon(menuBtn, 'more-horizontal');
+		menuBtn.addEventListener('click', (e) => {
 			e.stopPropagation();
-			this.confirmDelete(conversation);
+			this.showItemMenu(menuBtn, conversation);
 		});
 
 		// Keyboard support
@@ -144,6 +169,59 @@ export class ConversationPickerModal extends Modal {
 				this.confirmDelete(conversation);
 			}
 		});
+
+		// Apply current conversation styling
+		if (isCurrent) {
+			item.addClass('is-current');
+		}
+	}
+
+	private showItemMenu(button: HTMLButtonElement, conversation: Conversation): void {
+		const menu = new Menu();
+
+		// Rename
+		if (this.onRename) {
+			menu.addItem((item) =>
+				item
+					.setTitle('Rename')
+					.setIcon('pencil')
+					.onClick(() => this.promptRename(conversation)),
+			);
+		}
+
+		// Branch (only for non-branch conversations or branches that can be branched further)
+		if (this.onBranch && !isEmptyConversation(conversation)) {
+			menu.addItem((item) =>
+				item
+					.setTitle('Branch from here')
+					.setIcon('git-branch')
+					.onClick(() => this.onBranch!(conversation.id)),
+			);
+		}
+
+		menu.addSeparator();
+
+		// Delete
+		if (this.onDelete) {
+			menu.addItem((item) =>
+				item
+					.setTitle('Delete')
+					.setIcon('trash-2')
+					.setWarning(true)
+					.onClick(() => this.confirmDelete(conversation)),
+			);
+		}
+
+		const rect = button.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+	}
+
+	private promptRename(conversation: Conversation): void {
+		const currentTitle = conversation.branchName || conversationTitle(conversation);
+		new RenameModal(this.app, currentTitle, (newTitle) => {
+			if (this.onRename) this.onRename(conversation.id, newTitle);
+			this.renderList();
+		}).open();
 	}
 
 	private confirmDelete(conversation: Conversation): void {
@@ -154,6 +232,61 @@ export class ConversationPickerModal extends Modal {
 			this.renderList();
 		});
 		modal.open();
+	}
+
+	override onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
+/** Modal for renaming a conversation. */
+class RenameModal extends Modal {
+	constructor(
+		app: App,
+		private readonly currentTitle: string,
+		private readonly onConfirm: (newTitle: string) => void,
+	) {
+		super(app);
+	}
+
+	override onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('obsaide-rename-modal');
+
+		contentEl.createEl('h3', { text: 'Rename conversation' });
+
+		const input = contentEl.createEl('input', {
+			type: 'text',
+			cls: 'obsaide-rename-input',
+			value: this.currentTitle,
+		});
+		input.focus();
+		input.select();
+
+		const submit = () => {
+			const newTitle = input.value.trim();
+			if (newTitle && newTitle !== this.currentTitle) {
+				this.onConfirm(newTitle);
+			}
+			this.close();
+		};
+
+		input.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') submit();
+			else if (e.key === 'Escape') this.close();
+		});
+
+		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
+		buttons.createEl('button', {
+			cls: 'obsaide-button',
+			text: 'Cancel',
+		}).addEventListener('click', () => this.close());
+
+		buttons.createEl('button', {
+			cls: 'obsaide-button is-cta',
+			text: 'Rename',
+		}).addEventListener('click', submit);
 	}
 
 	override onClose(): void {
@@ -206,6 +339,11 @@ class ConfirmDeleteModal extends Modal {
 	override onClose(): void {
 		this.contentEl.empty();
 	}
+}
+
+/** Check if a conversation is empty (no messages). */
+function isEmptyConversation(conversation: Conversation): boolean {
+	return conversation.messages.length === 0;
 }
 
 function formatWhen(timestamp: number): string {
