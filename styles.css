@@ -852,8 +852,49 @@
 	font-size: var(--font-ui-medium);
 }
 
+.obsaide-new-conversation-btn {
+	all: unset;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	padding: var(--size-4-1) var(--size-4-2);
+	border-radius: var(--radius-s);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background-color: transparent;
+	border: 1px solid transparent;
+	transition: background-color 100ms ease, color 100ms ease, border-color 100ms ease;
+}
+
+.obsaide-new-conversation-btn:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-normal);
+	border-color: var(--background-modifier-border);
+}
+
+.obsaide-new-conversation-btn:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+	outline: none;
+}
+
+.obsaide-new-conversation-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+
+.obsaide-new-conversation-icon .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.obsaide-new-conversation-label {
+	font-weight: var(--font-medium);
+}
+
 .obsaide-conversation-search {
 	position: relative;
+	width: 100%;
 }
 
 .obsaide-search-icon {
@@ -888,19 +929,24 @@
 .obsaide-conversation-list {
 	max-height: 60vh;
 	overflow-y: auto;
-	padding: var(--size-4-1);
+	padding: 0;
 }
 
 .obsaide-conversation-item {
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
 	justify-content: space-between;
 	gap: var(--size-4-2);
-	padding: var(--size-4-2);
-	border-radius: var(--radius-s);
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: 0;
 	cursor: pointer;
 	transition: background-color 100ms ease;
 	min-width: 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.obsaide-conversation-item:last-child {
+	border-bottom: none;
 }
 
 .obsaide-conversation-item:hover {
@@ -908,7 +954,17 @@
 }
 
 .obsaide-conversation-item.is-current {
-	background-color: var(--background-modifier-success);
+	background-color: transparent;
+}
+
+.obsaide-conversation-item.is-current::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 3px;
+	background-color: var(--interactive-accent);
 }
 
 .obsaide-conversation-item:focus-visible {
@@ -925,8 +981,9 @@
 	display: flex;
 	align-items: center;
 	gap: var(--size-4-1);
-	margin-bottom: 2px;
+	margin-bottom: var(--size-4-1);
 	min-width: 0;
+	flex-wrap: wrap;
 }
 
 .obsaide-conversation-title {
@@ -943,21 +1000,23 @@
 .obsaide-branch-badge {
 	flex: 0 0 auto;
 	font-size: var(--font-ui-smaller);
-	color: var(--text-accent);
-	background-color: var(--background-modifier-success);
+	color: var(--text-muted);
+	background-color: transparent;
 	border-radius: var(--radius-s);
-	padding: 0 6px;
+	padding: 0 4px;
 	line-height: 1.4;
+	font-weight: var(--font-medium);
 }
 
 .obsaide-current-badge {
 	flex: 0 0 auto;
 	font-size: var(--font-ui-smaller);
-	color: var(--text-on-accent);
-	background-color: var(--interactive-accent);
+	color: var(--interactive-accent);
+	background-color: transparent;
 	border-radius: var(--radius-s);
-	padding: 0 6px;
+	padding: 0 4px;
 	line-height: 1.4;
+	font-weight: var(--font-medium);
 }
 
 .obsaide-conversation-meta {
@@ -972,6 +1031,7 @@
 	flex: 0 0 auto;
 	opacity: 0;
 	transition: opacity 120ms ease;
+	margin-left: var(--size-4-2);
 }
 
 .obsaide-conversation-item:hover .obsaide-conversation-actions,
@@ -1730,6 +1790,130 @@
 	margin-top: 2px;
 }
 
+/* ------------------------------------------------------------------ wikilink suggestions modal */
+
+.obsaide-wikilink-suggestions-modal {
+	max-width: 520px;
+}
+
+.obsaide-wikilink-header {
+	padding: var(--size-4-3);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.obsaide-wikilink-header h3 {
+	margin: 0;
+	font-size: var(--font-ui-medium);
+}
+
+.obsaide-wikilink-list {
+	max-height: 50vh;
+	overflow-y: auto;
+	padding: var(--size-4-2) var(--size-4-3);
+}
+
+.obsaide-wikilink-item {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2);
+	border-radius: var(--radius-s);
+	cursor: pointer;
+	transition: background-color 100ms ease;
+	min-width: 0;
+}
+
+.obsaide-wikilink-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.obsaide-wikilink-item:focus-visible {
+	box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+	outline: none;
+}
+
+.obsaide-wikilink-checkbox {
+	flex: 0 0 auto;
+	margin-top: 2px;
+}
+
+.obsaide-wikilink-content {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+}
+
+.obsaide-wikilink-title-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	flex-wrap: wrap;
+}
+
+.obsaide-wikilink-target {
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+}
+
+.obsaide-wikilink-path {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-family: var(--font-monospace);
+}
+
+.obsaide-wikilink-phrase {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+.obsaide-wikilink-reason {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+}
+
+.obsaide-wikilink-empty {
+	padding: var(--size-4-4);
+	text-align: center;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+.obsaide-wikilink-loading {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-4);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.obsaide-wikilink-loading .obsaide-spinner {
+	width: 16px;
+	height: 16px;
+	border: 2px solid var(--background-modifier-border);
+	border-top-color: var(--interactive-accent);
+	border-radius: 50%;
+	animation: obsaide-spin 0.8s linear infinite;
+}
+
+@keyframes obsaide-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.obsaide-wikilink-loading .obsaide-spinner {
+		animation: none;
+		opacity: 0.5;
+	}
+}
+
 /* ------------------------------------------------------------ quiz note modal */
 
 .obsaide-quiz-note-modal {
@@ -1785,6 +1969,10 @@
 }
 
 .obsaide-quiz-note-loading.is-hidden {
+	display: none;
+}
+
+.obsaide-button.is-hidden {
 	display: none;
 }
 

@@ -45,13 +45,15 @@ export class ConversationPickerModal extends Modal {
 		headerRow.createEl('h3', { text: 'Recent conversations' });
 
 		const newChatBtn = headerRow.createEl('button', {
-			cls: 'obsaide-icon-button is-small',
+			cls: 'obsaide-new-conversation-btn',
 			attr: { 'aria-label': 'New conversation' },
 		});
-		setIcon(newChatBtn, 'plus');
+		newChatBtn.createSpan({ cls: 'obsaide-new-conversation-icon' });
+		setIcon(newChatBtn.querySelector('.obsaide-new-conversation-icon')!, 'plus');
+		newChatBtn.createSpan({ cls: 'obsaide-new-conversation-label', text: 'New conversation' });
 		newChatBtn.addEventListener('click', () => {
 			this.close();
-			this.onChoose({} as Conversation); // Signal new conversation via special handling
+			this.onChoose({} as Conversation);
 		});
 
 		const searchContainer = header.createDiv({ cls: 'obsaide-conversation-search' });
@@ -105,7 +107,6 @@ export class ConversationPickerModal extends Modal {
 		const item = this.listContainer.createDiv({ cls: 'obsaide-conversation-item' });
 		item.dataset.id = conversation.id;
 
-		// Check if this is the current conversation
 		const isCurrent = conversation.id === this.currentConversationId;
 
 		// Main content (clickable to open)
@@ -113,7 +114,7 @@ export class ConversationPickerModal extends Modal {
 
 		const titleRow = main.createDiv({ cls: 'obsaide-conversation-title-row' });
 
-		// Conversation title - use branchName if available for branches, otherwise title
+		// Conversation title
 		const displayTitle = conversation.branchName || conversationTitle(conversation);
 		titleRow.createDiv({
 			cls: 'obsaide-conversation-title',
@@ -126,7 +127,7 @@ export class ConversationPickerModal extends Modal {
 			branchBadge.setText('↳ branch');
 		}
 
-		// Show current conversation indicator
+		// Show current conversation indicator (subtle)
 		if (isCurrent) {
 			const currentBadge = titleRow.createSpan({ cls: 'obsaide-current-badge' });
 			currentBadge.setText('Current');
@@ -170,7 +171,7 @@ export class ConversationPickerModal extends Modal {
 			}
 		});
 
-		// Apply current conversation styling
+		// Apply current conversation styling (subtle left border)
 		if (isCurrent) {
 			item.addClass('is-current');
 		}
