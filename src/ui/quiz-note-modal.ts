@@ -9,7 +9,7 @@ export interface QuizNoteOptions {
 	/** Difficulty level. */
 	difficulty: 'easy' | 'medium' | 'hard' | 'mixed';
 	/** Question type. */
-	type: 'short-answer' | 'multiple-choice' | 'mixed';
+	type: 'short-answer' | 'multiple-choice' | 'true-false' | 'explain' | 'application' | 'mixed';
 	/** Whether to include an answer key. */
 	includeAnswerKey: boolean;
 	/** Name for the quiz note (without .md extension). */
@@ -124,6 +124,9 @@ export class QuizNoteModal extends Modal {
 				for (const [value, label] of [
 					['short-answer', 'Short answer'],
 					['multiple-choice', 'Multiple choice'],
+					['true-false', 'True / False'],
+					['explain', 'Explain / Reasoning'],
+					['application', 'Application / Scenario'],
 					['mixed', 'Mixed'],
 				] as const) {
 					dropdown.addOption(value, label);

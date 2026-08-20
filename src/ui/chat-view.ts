@@ -55,6 +55,7 @@ import { QuizNoteModal, type QuizNoteOptions } from './quiz-note-modal';
 import { WikilinkSuggestionsModal } from './wikilink-suggestions-modal';
 import { WikilinkSetupModal } from './wikilink-setup-modal';
 import { BottomScroller } from './scroller';
+import { isPositionProtected, applyWikilink } from '../context/wikilink-suggestions';
 import type ObsAidePlugin from '../main';
 
 const STREAM_RENDER_INTERVAL_MS = 90;
@@ -1018,31 +1019,38 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 			confidence: 'high' | 'medium' | 'low';
 		}>
 	): Promise<void> {
-		// Convert to format expected by existing WikilinkSuggestionsModal
-		const formatted = suggestions.map(s => ({
-			targetPath: '', // Will be resolved from linkTarget
-			targetTitle: s.linkTarget,
-			sourcePhrase: s.targetPhrase,
-			confidence: s.confidence === 'high' ? 0.9 : s.confidence === 'medium' ? 0.7 : 0.5,
-			reason: s.reason,
-			replacement: s.replacement, // Custom replacement with potential rewrite
-		}));
+		// Read current target content
+		const targetContent = await this.app.vault.cachedRead(targetFile);
 
-		// For now, use the existing modal with adapted suggestions
-		// TODO: Build a proper review UI with diff preview
-		const modal = new WikilinkSuggestionsModal(this.app, {
-			sourceText: await this.app.vault.cachedRead(targetFile),
-			file: targetFile,
-			onApply: (newText) => void this.applyWikilinks(targetFile, newText),
-		});
-		modal.open();
-		modal.setSuggestions(formatted.map(s => ({
-			targetPath: s.targetPath,
-			targetTitle: s.targetTitle,
-			sourcePhrase: s.sourcePhrase,
-			confidence: s.confidence,
-			reason: s.reason,
-		})));
+		// Apply all suggestions to create proposed text
+		let proposedText = targetContent;
+		for (const suggestion of suggestions) {
+			if (suggestion.replacement) {
+				const idx = proposedText.toLowerCase().indexOf(suggestion.targetPhrase.toLowerCase());
+				if (idx !== -1 && !isPositionProtected(proposedText, idx)) {
+					proposedText = proposedText.slice(0, idx) + suggestion.replacement + proposedText.slice(idx + suggestion.targetPhrase.length);
+				}
+			} else {
+				proposedText = applyWikilink(proposedText, suggestion.targetPhrase, suggestion.linkTarget);
+			}
+		}
+
+		// If no changes, notify and return
+		if (proposedText === targetContent) {
+			new Notice('No changes to apply.');
+			return;
+		}
+
+		// Show review modal using existing EditPreviewModal infrastructure
+		new EditPreviewModal(this.app, {
+			proposedText,
+			anchor: {
+				path: targetFile.path,
+				cursor: { line: 0, ch: 0 },
+				selection: { from: { line: 0, ch: 0 }, to: { line: 0, ch: 0 }, text: targetContent },
+			},
+			replacesAnchor: true,
+		}).open();
 	}
 
 	private async applyWikilinks(file: TFile, newText: string): Promise<void> {
@@ -1524,9 +1532,15 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 				return 'Format: Short answer — open-ended questions';
 			case 'multiple-choice':
 				return 'Format: Multiple choice — each question MUST have 4 options labeled A, B, C, D as a Markdown list:\n- A. Option\n- B. Option\n- C. Option\n- D. Option';
+			case 'true-false':
+				return 'Format: True / False — each question is a statement that is either true or false. For false statements, explain the correction in the answer.';
+			case 'explain':
+				return 'Format: Explain / Reasoning — questions that test understanding of concepts, not just memorization. Ask "why" or "how".';
+			case 'application':
+				return 'Format: Application / Scenario — questions that require applying the supplied material to a concrete scenario or problem.';
 			case 'mixed':
 			default:
-				return 'Format: Mixed — alternate between short answer and multiple choice questions';
+				return 'Format: Mixed — distribute questions across all 5 types: Short answer, Multiple choice, True/False, Explain/Reasoning, Application/Scenario. Distribute as evenly as possible.';
 		}
 	}
 }
