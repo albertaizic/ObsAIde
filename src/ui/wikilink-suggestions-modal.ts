@@ -18,6 +18,7 @@ export class WikilinkSuggestionsModal extends Modal {
 	private readonly onApply: (newText: string) => void;
 	private suggestions: WikilinkSuggestion[] = [];
 	private selected = new Set<number>();
+	private pendingSuggestions: WikilinkSuggestion[] | null = null;
 
 	constructor(app: App, options: WikilinkSuggestionsModalOptions) {
 		super(app);
@@ -52,6 +53,23 @@ export class WikilinkSuggestionsModal extends Modal {
 			cls: 'obsaide-button',
 			text: 'Cancel',
 		}).addEventListener('click', () => this.close());
+
+		// Render any pending suggestions that were set before onOpen
+		if (this.pendingSuggestions !== null) {
+			this.suggestions = this.pendingSuggestions;
+			this.pendingSuggestions = null;
+			this.renderList();
+		}
+	}
+
+	/** Show a loading state while suggestions are being generated. */
+	showLoading(): void {
+		if (!this.listContainer) return;
+		this.listContainer.empty();
+		const loading = this.listContainer.createDiv({ cls: 'obsaide-wikilink-loading' });
+		loading.createDiv({ cls: 'obsaide-spinner' });
+		loading.createSpan({ text: 'Finding wikilinks…' });
+		this.applyButton.disabled = true;
 	}
 
 	private listContainer!: HTMLElement;
@@ -60,7 +78,12 @@ export class WikilinkSuggestionsModal extends Modal {
 	setSuggestions(suggestions: WikilinkSuggestion[]): void {
 		this.suggestions = suggestions;
 		this.selected.clear();
-		this.renderList();
+		// If modal is already open, render immediately; otherwise store for onOpen
+		if (this.listContainer) {
+			this.renderList();
+		} else {
+			this.pendingSuggestions = suggestions;
+		}
 	}
 
 	private renderList(): void {

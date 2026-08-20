@@ -17,6 +17,11 @@ describe('normalizeSettings', () => {
 		expect(normalizeSettings('nope')).toEqual(createDefaultSettings());
 	});
 
+	it('defaults contextScope to "none" for new conversations', () => {
+		expect(createDefaultSettings().contextScope).toBe('none');
+		expect(normalizeSettings({}).contextScope).toBe('none');
+	});
+
 	it('always produces an entry for every provider', () => {
 		const settings = normalizeSettings({ providers: { openai: { apiKey: 'k' } } });
 		for (const id of PROVIDER_IDS) {

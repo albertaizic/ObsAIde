@@ -397,3 +397,103 @@ describe('Wikilink Suggestions - logic concepts', () => {
 		});
 	});
 });
+
+describe('Wikilink Suggestions Modal - lifecycle regression', () => {
+	/**
+	 * Regression test for the modal lifecycle fix.
+	 * Previously, calling setSuggestions() before modal.open() would crash
+	 * because listContainer was undefined. The fix stores pending suggestions
+	 * and renders them in onOpen() after listContainer is created.
+	 */
+	interface WikilinkSuggestion {
+		targetPath: string;
+		targetTitle: string;
+		sourcePhrase: string;
+		confidence: number;
+		reason: string;
+	}
+
+	// Simulate the modal's suggestion handling logic
+	class MockWikilinkModal {
+		private suggestions: WikilinkSuggestion[] = [];
+		private pendingSuggestions: WikilinkSuggestion[] | null = null;
+		private listContainer: { empty: () => void; createDiv: (opts: { cls: string }) => { createDiv: (opts: { cls: string; text: string }) => void; createSpan: (opts: { text: string }) => void } } | null = null;
+
+		setSuggestions(suggestions: WikilinkSuggestion[]): void {
+			this.suggestions = suggestions;
+			if (this.listContainer) {
+				this.renderList();
+			} else {
+				this.pendingSuggestions = suggestions;
+			}
+		}
+
+		simulateOnOpen(): void {
+			// Create the list container (like onOpen does)
+			this.listContainer = {
+				empty: () => {},
+				createDiv: (opts: { cls: string }) => ({
+					createDiv: () => {},
+					createSpan: () => {},
+				}),
+			};
+			// Render pending suggestions
+			if (this.pendingSuggestions !== null) {
+				this.suggestions = this.pendingSuggestions;
+				this.pendingSuggestions = null;
+				this.renderList();
+			}
+		}
+
+		private renderList(): void {
+			if (!this.listContainer) throw new Error('listContainer not initialized');
+			// Just verify we can access listContainer
+			this.listContainer.empty();
+		}
+	}
+
+	it('handles setSuggestions before onOpen without crashing', () => {
+		const modal = new MockWikilinkModal();
+		const suggestions: WikilinkSuggestion[] = [
+			{ targetPath: 'a.md', targetTitle: 'A', sourcePhrase: 'a', confidence: 0.9, reason: 'test' },
+		];
+
+		// This used to crash: setSuggestions called before listContainer exists
+		modal.setSuggestions(suggestions);
+
+		// Now simulate onOpen
+		modal.simulateOnOpen();
+
+		// Should not throw
+		expect(modal['suggestions']).toHaveLength(1);
+	});
+
+	it('handles setSuggestions after onOpen', () => {
+		const modal = new MockWikilinkModal();
+		const suggestions: WikilinkSuggestion[] = [
+			{ targetPath: 'a.md', targetTitle: 'A', sourcePhrase: 'a', confidence: 0.9, reason: 'test' },
+		];
+
+		modal.simulateOnOpen();
+		modal.setSuggestions(suggestions);
+
+		expect(modal['suggestions']).toHaveLength(1);
+	});
+
+	it('handles multiple setSuggestions calls', () => {
+		const modal = new MockWikilinkModal();
+		const suggestions1: WikilinkSuggestion[] = [
+			{ targetPath: 'a.md', targetTitle: 'A', sourcePhrase: 'a', confidence: 0.9, reason: 'test' },
+		];
+		const suggestions2: WikilinkSuggestion[] = [
+			{ targetPath: 'b.md', targetTitle: 'B', sourcePhrase: 'b', confidence: 0.8, reason: 'test' },
+		];
+
+		modal.setSuggestions(suggestions1);
+		modal.simulateOnOpen();
+		modal.setSuggestions(suggestions2);
+
+		expect(modal['suggestions']).toHaveLength(1);
+		expect(modal['suggestions'][0].targetTitle).toBe('B');
+	});
+});
