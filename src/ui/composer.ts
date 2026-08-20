@@ -1,8 +1,15 @@
-import { setIcon, setTooltip, type App } from 'obsidian';
+import { Menu, setIcon, setTooltip, type App } from 'obsidian';
 import type { Attachment } from '../context/types';
 import { summarize } from '../utils/text';
 import { attachmentIcon, attachmentLabel } from './attachment-chip';
 import { NoteAutocomplete, type NoteAttachment } from './note-autocomplete';
+
+/** Type for Obsidian Menu item (loose typing to match Obsidian's API). */
+type MenuItem = {
+	setTitle: (title: string) => MenuItem;
+	setChecked: (checked: boolean) => MenuItem;
+	onClick: (fn: () => void) => MenuItem;
+};
 
 export interface ComposerCallbacks {
 	onSend: (text: string) => void;
@@ -16,6 +23,10 @@ export interface ComposerCallbacks {
 	onInspectAttachment: (attachment: Attachment) => void;
 	/** Add a note attachment from @ autocomplete. */
 	onAddNoteAttachment: (attachment: NoteAttachment) => void;
+	/** Called when response length selector changes. */
+	onChangeLength?: (length: 'short' | 'normal' | 'detailed') => void;
+	/** Called when context scope selector changes. */
+	onChangeScope?: (scope: 'none' | 'selection' | 'section' | 'note' | 'linked' | 'folder') => void;
 }
 
 const MAX_TEXTAREA_HEIGHT = 220;
@@ -27,6 +38,8 @@ export class Composer {
 	private readonly sendButton: HTMLButtonElement;
 	private readonly addButton: HTMLButtonElement;
 	private readonly actionsButton: HTMLButtonElement;
+	private readonly lengthButton: HTMLButtonElement;
+	private readonly scopeButton: HTMLButtonElement;
 	private readonly autocomplete: NoteAutocomplete;
 	private generating = false;
 
@@ -55,6 +68,13 @@ export class Composer {
 			this.callbacks.onOpenActions(this.actionsButton),
 		);
 		this.attachmentsEl = contextRow.createDiv({ cls: 'obsaide-chips' });
+
+		// Secondary controls row (response length, context scope)
+		const controlsRow = root.createDiv({ cls: 'obsaide-controls-row' });
+		this.lengthButton = controlsRow.createEl('button', { cls: 'obsaide-control-select' });
+		this.lengthButton.addEventListener('click', () => this.showLengthMenu());
+		this.scopeButton = controlsRow.createEl('button', { cls: 'obsaide-control-select' });
+		this.scopeButton.addEventListener('click', () => this.showScopeMenu());
 
 		const inputRow = root.createDiv({ cls: 'obsaide-input-row' });
 		this.textarea = inputRow.createEl('textarea', {
@@ -203,6 +223,83 @@ export class Composer {
 		this.textarea.setCssStyles({ height: 'auto' });
 		const height = Math.min(this.textarea.scrollHeight, MAX_TEXTAREA_HEIGHT);
 		this.textarea.setCssStyles({ height: `${height}px` });
+	}
+
+	/** Update the response length button label. */
+	setLength(length: 'short' | 'normal' | 'detailed'): void {
+		const labels: Record<string, string> = { short: 'Short', normal: 'Normal', detailed: 'Detailed' };
+		this.lengthButton.setText(labels[length] ?? 'Normal');
+		setTooltip(this.lengthButton, `Response length: ${labels[length]}. Click to change.`);
+	}
+
+	/** Update the context scope button label. */
+	setScope(scope: 'none' | 'selection' | 'section' | 'note' | 'linked' | 'folder'): void {
+		const labels: Record<string, string> = {
+			none: 'None',
+			selection: 'Selection',
+			section: 'Section',
+			note: 'Note',
+			linked: 'Linked notes',
+			folder: 'Folder',
+		};
+		this.scopeButton.setText(labels[scope] ?? 'Selection');
+		setTooltip(this.scopeButton, `Context scope: ${labels[scope]}. Click to change.`);
+	}
+
+	private showLengthMenu(): void {
+		const menu = new Menu();
+		const currentLength = this.lengthButton.textContent ?? 'Normal';
+
+		for (const [value, label] of [
+			['short', 'Short'],
+			['normal', 'Normal'],
+			['detailed', 'Detailed'],
+		] as const) {
+			menu.addItem((item: MenuItem) => {
+				item
+					.setTitle(label)
+					.setChecked(value === currentLength)
+					.onClick(() => {
+						this.setLength(value);
+						this.callbacks.onChangeLength?.(value);
+					});
+				return;
+			});
+		}
+
+		const rect = this.lengthButton.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+	}
+
+	private showScopeMenu(): void {
+		const menu = new Menu();
+		const currentScope = this.scopeButton.textContent ?? 'Selection';
+
+		const scopes: Array<'none' | 'selection' | 'section' | 'note' | 'linked' | 'folder'> = ['none', 'selection', 'section', 'note', 'linked', 'folder'];
+		const scopeLabels: Record<string, string> = {
+			none: 'None',
+			selection: 'Selection',
+			section: 'Section',
+			note: 'Note',
+			linked: 'Linked notes',
+			folder: 'Folder',
+		};
+
+		for (const value of scopes) {
+			menu.addItem((item: MenuItem) => {
+				item
+					.setTitle(scopeLabels[value] ?? value)
+					.setChecked(value === currentScope)
+					.onClick(() => {
+						this.setScope(value);
+						this.callbacks.onChangeScope?.(value);
+					});
+				return;
+			});
+		}
+
+		const rect = this.scopeButton.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
 	}
 
 	/** Clean up autocomplete and event listeners. */

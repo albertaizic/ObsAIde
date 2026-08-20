@@ -23,6 +23,7 @@ import { describeCustomActionAvailability, runAction, runCustomAction } from '..
 import type { ChatController, SendRequest } from '../chat/controller';
 import { isEmptyConversation, type Conversation, type ConversationMessage } from '../chat/conversation';
 import { buildConversationExportContent, sanitizeExportName, type ConversationExportMode as ExportMode } from '../chat/export';
+import { buildContextBlock } from '../context/resolve';
 import {
 	captureFolder,
 	captureNote,
@@ -31,6 +32,7 @@ import {
 	getEditorTarget,
 	isDuplicateAttachment,
 } from '../context/collect';
+import { buildSystemPrompt } from '../prompts/system';
 import { resolveLinkedNotes } from '../context/linked-notes-vault';
 import type { LinkedNoteCandidate } from '../context/linked-notes';
 import { extractCurrentSection } from '../context/section';
@@ -50,11 +52,11 @@ import { MessageList } from './message-list';
 import { ModelPickerModal } from './model-picker';
 import { NotePickerModal } from './note-picker';
 import { PromptModal } from './prompt-modal';
-import { QuizSetupModal } from './quiz-setup-modal';
+import { QuizNoteModal, type QuizNoteOptions } from './quiz-note-modal';
+import { WikilinkSuggestionsModal } from './wikilink-suggestions-modal';
 import { BottomScroller } from './scroller';
-import { VaultSearchModal } from './vault-search-modal';
+import { discoverCandidates, generateSuggestions, filterExistingLinks } from '../context/wikilink-suggestions';
 import type ObsAidePlugin from '../main';
-import type { QuizSetupOptions } from '../chat/quiz';
 
 const STREAM_RENDER_INTERVAL_MS = 90;
 
@@ -66,8 +68,6 @@ export class AideChatView extends ItemView {
 	private scroller!: BottomScroller;
 	private providerButton!: HTMLButtonElement;
 	private modelButton!: HTMLButtonElement;
-	private lengthButton!: HTMLButtonElement;
-	private scopeButton!: HTMLButtonElement;
 	private profileButton!: HTMLButtonElement;
 	private modeBadge!: HTMLElement;
 	private scrollerEl!: HTMLElement;
@@ -128,6 +128,17 @@ export class AideChatView extends ItemView {
 				const file = this.app.vault.getAbstractFileByPath(attachment.path);
 				if (file instanceof TFile) this.maybeOfferLinkedNotes([file]);
 			},
+			onChangeLength: (length) => {
+				const settings = this.controller.getSettings();
+				settings.responseLength = length;
+				void this.controller.saveSettings();
+			},
+			onChangeScope: (scope) => {
+				const settings = this.controller.getSettings();
+				settings.contextScope = scope;
+				void this.controller.saveSettings();
+				void this.applyScopeContext();
+			},
 		}, this.app);
 
 		this.unsubscribe = this.controller.onChange((reason) => {
@@ -158,8 +169,6 @@ export class AideChatView extends ItemView {
 				cursor: target.editor.getCursor('from'),
 			};
 		}
-		// The header does not exist yet during the initial capture in onOpen().
-		if (this.scopeButton) this.updateScopeButton();
 	}
 
 	override async onClose(): Promise<void> {
@@ -258,14 +267,6 @@ export class AideChatView extends ItemView {
 		this.providerButton.addEventListener('click', () => this.showProviderMenu());
 		this.modelButton = selectors.createEl('button', { cls: 'obsaide-select is-model' });
 		this.modelButton.addEventListener('click', () => this.openModelPicker());
-
-		// Response length selector
-		this.lengthButton = selectors.createEl('button', { cls: 'obsaide-select is-length' });
-		this.lengthButton.addEventListener('click', () => this.showLengthMenu());
-
-		// Context scope selector
-		this.scopeButton = selectors.createEl('button', { cls: 'obsaide-select is-scope' });
-		this.scopeButton.addEventListener('click', () => this.showScopeMenu());
 
 		// Profile selector
 		this.profileButton = selectors.createEl('button', { cls: 'obsaide-select is-profile' });
@@ -435,81 +436,6 @@ export class AideChatView extends ItemView {
 		).open();
 	}
 
-	private showLengthMenu(): void {
-		const menu = new Menu();
-		const currentLength = this.controller.getSettings().responseLength ?? 'normal';
-
-		for (const [value, label] of [
-			['short', 'Short'],
-			['normal', 'Normal'],
-			['detailed', 'Detailed'],
-		] as const) {
-			menu.addItem((item) =>
-				item
-					.setTitle(label)
-					.setChecked(value === currentLength)
-					.onClick(async () => {
-						const settings = this.controller.getSettings();
-						settings.responseLength = value;
-						await this.controller.saveSettings();
-						this.updateLengthButton();
-					}),
-			);
-		}
-
-		const rect = this.lengthButton.getBoundingClientRect();
-		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
-	}
-
-	private updateLengthButton(): void {
-		const settings = this.controller.getSettings();
-		const length = settings.responseLength ?? 'normal';
-		const labels: Record<string, string> = { short: 'Short', normal: 'Normal', detailed: 'Detailed' };
-		this.lengthButton.setText(labels[length] ?? 'Normal');
-		setTooltip(this.lengthButton, `Response length: ${labels[length]}. Click to change.`);
-	}
-
-	private showScopeMenu(): void {
-		const menu = new Menu();
-		const currentScope = this.controller.getSettings().contextScope ?? 'selection';
-
-		const scopes: [ContextScope, string][] = [
-			['none', 'None'],
-			['selection', 'Selection'],
-			['section', 'Section'],
-			['note', 'Note'],
-			['linked', 'Linked notes'],
-			['folder', 'Folder'],
-		];
-
-		for (const [value, label] of scopes) {
-			menu.addItem((item) =>
-				item
-					.setTitle(label)
-					.setChecked(value === currentScope)
-					.onClick(async () => {
-						const settings = this.controller.getSettings();
-						settings.contextScope = value;
-						await this.controller.saveSettings();
-						this.updateScopeButton();
-						// Apply the scope context immediately
-						await this.applyScopeContext();
-					}),
-			);
-		}
-
-		const rect = this.scopeButton.getBoundingClientRect();
-		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
-	}
-
-	private updateScopeButton(): void {
-		const settings = this.controller.getSettings();
-		const scope = settings.contextScope ?? 'selection';
-		const status = this.computeScopeStatusText(scope);
-		this.scopeButton.setText(status);
-		setTooltip(this.scopeButton, `${status}. Click to change the context scope.`);
-	}
-
 	private updateProfileButton(): void {
 		const activeProfile = this.plugin.profiles.getActive();
 		this.profileButton.setText(activeProfile.name);
@@ -642,13 +568,13 @@ export class AideChatView extends ItemView {
 				new FolderPickerModal(this.app, (folder) => {
 					this.addAttachment(captureFolder(this.app, folder));
 					this.composer.setAttachments(this.attachments);
-					this.updateScopeButton();
+					this.composer.setScope(scope);
 				}).open();
 			}
 		}
 
 		this.composer.setAttachments(this.attachments);
-		this.updateScopeButton();
+		this.composer.setScope(scope);
 	}
 
 	/** Vault paths already covered by the current attachments, so a linked-note offer never repeats them. */
@@ -725,10 +651,17 @@ export class AideChatView extends ItemView {
 		);
 		menu.addItem((item) =>
 			item
-				.setTitle('Quiz me…')
+				.setTitle('Create quiz note…')
 				.setIcon('help-circle')
 				.setDisabled(this.controller.isGenerating || this.attachments.length === 0)
-				.onClick(() => this.openQuizSetup()),
+				.onClick(() => this.openQuizNoteSetup()),
+		);
+		menu.addItem((item) =>
+			item
+				.setTitle('Suggest wikilinks…')
+				.setIcon('link-2')
+				.setDisabled(this.controller.isGenerating || this.attachments.length === 0)
+				.onClick(() => this.openWikilinkSuggestions()),
 		);
 		menu.addSeparator();
 		menu.addItem((item) =>
@@ -766,15 +699,84 @@ export class AideChatView extends ItemView {
 			new Notice('No conversations yet.');
 			return;
 		}
-		new ConversationPickerModal(this.app, conversations, (conversation) =>
-			this.controller.openConversation(conversation.id),
+		new ConversationPickerModal(this.app, {
+			conversations,
+			onChoose: (conversation) => this.controller.openConversation(conversation.id),
+			onDelete: (id) => this.controller.deleteConversation(id),
+			currentConversationId: this.controller.current.id,
+		}).open();
+	}
+
+	private openQuizNoteSetup(): void {
+		new QuizNoteModal(this.app, this.attachments, (options) =>
+			void this.generateQuizNote(options),
 		).open();
 	}
 
-	private openQuizSetup(): void {
-		new QuizSetupModal(this.app, (setup: QuizSetupOptions) => {
-			void this.controller.startQuiz(setup);
-		}).open();
+	private async openWikilinkSuggestions(): Promise<void> {
+		// Get the active file
+		const activeFile = this.app.workspace.getActiveFile();
+		if (!activeFile) {
+			new Notice('No active note to suggest wikilinks for.');
+			return;
+		}
+
+		// Get the text content - use selection if available, otherwise use the note content
+		const target = getEditorTarget(this.app);
+		let sourceText = '';
+		if (target && target.editor.getSelection().trim().length > 0) {
+			sourceText = target.editor.getSelection();
+		} else {
+			// Use the note content (we'll read it)
+			try {
+				sourceText = await this.app.vault.cachedRead(activeFile);
+			} catch {
+				new Notice('Could not read the note.');
+				return;
+			}
+		}
+
+		await this.showWikilinkSuggestions(activeFile, sourceText);
+	}
+
+	private async showWikilinkSuggestions(file: TFile, sourceText: string): Promise<void> {
+		// Discover candidates from the vault
+		const candidates = await discoverCandidates(this.app, sourceText);
+		if (candidates.length === 0) {
+			new Notice('No wikilink candidates found.');
+			return;
+		}
+
+		// Filter out already linked notes
+		const filteredCandidates = filterExistingLinks(candidates, sourceText);
+
+		// Generate suggestions
+		const suggestions = generateSuggestions(sourceText, filteredCandidates);
+		if (suggestions.length === 0) {
+			new Notice('No wikilink suggestions for this text.');
+			return;
+		}
+
+		// Show the modal
+		const modal = new WikilinkSuggestionsModal(this.app, {
+			sourceText,
+			file,
+			onApply: (newText) => void this.applyWikilinks(file, newText),
+		});
+		modal.setSuggestions(suggestions);
+		modal.open();
+	}
+
+	private async applyWikilinks(file: TFile, newText: string): Promise<void> {
+		try {
+			await this.app.vault.modify(file, newText);
+			new Notice('Wikilinks applied.');
+			// Optionally open the note
+			const leaf = this.app.workspace.getLeaf(false);
+			if (leaf) await leaf.openFile(file);
+		} catch {
+			new Notice('Could not apply wikilinks.');
+		}
 	}
 
 	/**
@@ -876,19 +878,7 @@ export class AideChatView extends ItemView {
 					).open();
 				}),
 		);
-		menu.addItem((item) =>
-			item
-				.setTitle('Search vault…')
-				.setIcon('search')
-				.onClick(() => {
-					new VaultSearchModal(this.app, {
-						onSelect: (attachments) => {
-							for (const attachment of attachments) this.addAttachment(attachment);
-						},
-					}).open();
-				}),
-		);
-		if (this.attachments.length > 0) {
+				if (this.attachments.length > 0) {
 			menu.addSeparator();
 			menu.addItem((item) =>
 				item
@@ -997,8 +987,10 @@ export class AideChatView extends ItemView {
 		this.modelButton.setText(summarize(model, 28));
 		setTooltip(this.modelButton, `Model: ${model}. Select to change.`);
 
-		this.updateLengthButton();
-		this.updateScopeButton();
+		// Update composer controls
+		const settings = this.controller.getSettings();
+		this.composer.setLength(settings.responseLength ?? 'normal');
+		this.composer.setScope(settings.contextScope ?? 'selection');
 		this.updateProfileButton();
 
 		this.modeBadge.toggleClass('is-visible', this.controller.current.mode === 'tutor');
@@ -1050,6 +1042,118 @@ export class AideChatView extends ItemView {
 				this.composer.setText(prompt);
 				this.composer.focus();
 			});
+		}
+	}
+
+	/**
+	 * Generate a quiz note from the current context and create it as a Markdown file.
+	 */
+	private async generateQuizNote(options: QuizNoteOptions): Promise<void> {
+		const settings = this.controller.getSettings();
+		const providerId = settings.defaultProvider;
+		const model = settings.providers[providerId].model;
+
+		// Build context block from attachments
+		let contextBlock = '';
+		if (options.attachments.length > 0) {
+			const { block } = await buildContextBlock(this.plugin.app, options.attachments, {
+				maxCharsPerNote: settings.maxCharsPerNote,
+				maxContextChars: settings.maxContextChars,
+			});
+			contextBlock = block;
+		}
+
+		if (!contextBlock) {
+			new Notice('No context available for quiz generation.');
+			return;
+		}
+
+		// Build the system prompt
+		const activeProfile = this.plugin.profiles.getActive();
+		const systemPrompt = buildSystemPrompt({
+			mode: 'chat',
+			customInstructions: settings.customInstructions,
+			responseLength: settings.responseLength,
+			profileInstructions: activeProfile.instructions,
+		});
+
+		// Build the quiz generation prompt
+		const difficultyInstruction = this.getDifficultyInstruction(options.difficulty);
+		const typeInstruction = this.getTypeInstruction(options.type);
+		const answerKeyInstruction = options.includeAnswerKey
+			? 'Include an "Answer Key" section at the end with answers to all questions.'
+			: 'Do NOT include answers. Questions only.';
+
+		const userPrompt = `${contextBlock}\n\nGenerate a study quiz based ONLY on the provided context.\n\nRequirements:\n- ${options.questionCount} questions\n- ${difficultyInstruction}\n- ${typeInstruction}\n- ${answerKeyInstruction}\n- Use clear Markdown formatting\n- Ground every question in the provided context — do not invent material\n- If the context is insufficient for a question, skip that topic\n\nOutput only the quiz as Markdown.`;
+
+		// Show a notice while generating
+		new Notice('Generating quiz…');
+
+		try {
+			const result = await this.plugin.providers.complete({
+				providerId,
+				model,
+				system: systemPrompt,
+				messages: [{ role: 'user', content: userPrompt }],
+			});
+
+			const quizContent = result.text.trim();
+			if (!quizContent) {
+				new Notice('Quiz generation returned empty content.');
+				return;
+			}
+
+			// Add frontmatter
+			const frontmatter = `---\ncreated: ${new Date().toISOString().split('T')[0]}\nsource: ObsAIde\ntype: quiz\n---\n\n`;
+			const fullContent = frontmatter + quizContent;
+
+			// Create the note
+			const folderPath = options.folderPath.trim();
+			const resolvedFolder = folderPath
+				? this.app.vault.getAbstractFileByPath(folderPath)
+				: null;
+			const folder = resolvedFolder instanceof TFolder ? resolvedFolder : this.app.vault.getRoot();
+
+			const sanitized = options.name.replace(/[<>:"/\\|?*]/g, '-');
+			let counter = 1;
+			let finalPath = `${folder.path}/${sanitized}.md`;
+			while (this.app.vault.getAbstractFileByPath(finalPath)) {
+				finalPath = `${folder.path}/${sanitized} ${counter}.md`;
+				counter++;
+			}
+
+			const file = await this.app.vault.create(finalPath, fullContent);
+			new Notice(`Created quiz: ${file.basename}`);
+			const leaf = this.app.workspace.getLeaf(false);
+			if (leaf) await leaf.openFile(file);
+		} catch (error) {
+			new Notice('Quiz generation failed: ' + String(error));
+		}
+	}
+
+	private getDifficultyInstruction(difficulty: QuizNoteOptions['difficulty']): string {
+		switch (difficulty) {
+			case 'easy':
+				return 'Difficulty: Easy — foundational questions about definitions and key concepts';
+			case 'medium':
+				return 'Difficulty: Medium — questions requiring explanation, application, or connecting concepts';
+			case 'hard':
+				return 'Difficulty: Hard — questions requiring synthesis, analysis, or identifying subtle distinctions';
+			case 'mixed':
+			default:
+				return 'Difficulty: Mixed — vary between easy, medium, and hard questions';
+		}
+	}
+
+	private getTypeInstruction(type: QuizNoteOptions['type']): string {
+		switch (type) {
+			case 'short-answer':
+				return 'Format: Short answer — open-ended questions';
+			case 'multiple-choice':
+				return 'Format: Multiple choice — provide 4 options (A, B, C, D) with each question';
+			case 'mixed':
+			default:
+				return 'Format: Mixed — alternate between short answer and multiple choice';
 		}
 	}
 }

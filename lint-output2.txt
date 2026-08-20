@@ -1,0 +1,112 @@
+
+> obsaide@0.2.0 lint
+> eslint .
+
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\chat\export.test.ts
+    1:32  warning  'vi' is defined but never used                   @typescript-eslint/no-unused-vars
+    7:2   warning  'conversationTitle' is defined but never used    @typescript-eslint/no-unused-vars
+    8:2   warning  'isEmptyConversation' is defined but never used  @typescript-eslint/no-unused-vars
+    9:2   warning  'toProviderMessages' is defined but never used   @typescript-eslint/no-unused-vars
+  244:30  error    Unnecessary escape character: \/                 no-useless-escape
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\context\section.test.ts
+    7:2   warning  'extractCurrentSection' is defined but never used                             @typescript-eslint/no-unused-vars
+  235:9   warning  'attachment' is assigned a value but never used                               @typescript-eslint/no-unused-vars
+  236:4   error    Unsafe argument of type `any` assigned to a parameter of type `App`           @typescript-eslint/no-unsafe-argument
+  236:12  warning  Unexpected any. Specify a different type                                      @typescript-eslint/no-explicit-any
+  237:4   error    Unsafe argument of type `any` assigned to a parameter of type `Editor`        @typescript-eslint/no-unsafe-argument
+  237:82  warning  Unexpected any. Specify a different type                                      @typescript-eslint/no-explicit-any
+  238:4   error    Unsafe argument of type `any` assigned to a parameter of type `TFile | null`  @typescript-eslint/no-unsafe-argument
+  238:45  warning  Unexpected any. Specify a different type                                      @typescript-eslint/no-explicit-any
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\context\smart-context.test.ts
+  1:32  warning  'vi' is defined but never used          @typescript-eslint/no-unused-vars
+  1:36  warning  'beforeEach' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\settings\custom-actions.test.ts
+   57:10  warning  'action2' is assigned a value but never used           @typescript-eslint/no-unused-vars
+  162:19  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  162:24  error    Unsafe member access .customActions on an `any` value  @typescript-eslint/no-unsafe-member-access
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\settings\settings-tab.ts
+  487:11  warning  Use sentence case for UI text. Expected: 'No custom actions yet. Click "create new action" to add one.'  obsidianmd/ui/sentence-case
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\ui\chat-view.ts
+  695:14  error  Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator  @typescript-eslint/no-floating-promises
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\ui\inline-menu.test.ts
+    1:36  warning  'beforeEach' is defined but never used                                                                                   @typescript-eslint/no-unused-vars
+   17:8   warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+   19:30  warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+   20:21  warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+   21:18  warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+   22:13  warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+   32:11  warning  'createMockFile' is defined but never used                                                                               @typescript-eslint/no-unused-vars
+   56:19  warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+   57:4   error    Unsafe call of an `any` typed value                                                                                      @typescript-eslint/no-unsafe-call
+   57:15  error    Unsafe member access .workspace on an `any` value                                                                        @typescript-eslint/no-unsafe-member-access
+   57:72  error    The `Function` type accepts any function-like value.
+Prefer explicitly defining any function parameters and return type  @typescript-eslint/no-unsafe-function-type
+   63:4   error    Unsafe call of an `any` typed value                                                                                      @typescript-eslint/no-unsafe-call
+   63:15  error    Unsafe member access .workspace on an `any` value                                                                        @typescript-eslint/no-unsafe-member-access
+   65:22  error    Unsafe member access .workspace on an `any` value                                                                        @typescript-eslint/no-unsafe-member-access
+   79:4   error    Unsafe call of a type that could not be resolved                                                                         @typescript-eslint/no-unsafe-call
+   89:4   error    Unsafe call of a type that could not be resolved                                                                         @typescript-eslint/no-unsafe-call
+   99:42  error    Unsafe call of a type that could not be resolved                                                                         @typescript-eslint/no-unsafe-call
+   99:42  error    Unsafe call of a type that could not be resolved                                                                         @typescript-eslint/no-unsafe-call
+   99:64  error    Unsafe member access .trim on a type that cannot be resolved                                                             @typescript-eslint/no-unsafe-member-access
+   99:71  error    Unsafe member access .length on a type that cannot be resolved                                                           @typescript-eslint/no-unsafe-member-access
+  105:31  warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+  105:40  warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+  108:34  warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+  108:43  warning  Unexpected any. Specify a different type                                                                                 @typescript-eslint/no-explicit-any
+  111:25  error    Unsafe member access .line on an `any` value                                                                             @typescript-eslint/no-unsafe-member-access
+  111:39  error    Unsafe member access .line on an `any` value                                                                             @typescript-eslint/no-unsafe-member-access
+  112:25  error    Unsafe member access .ch on an `any` value                                                                               @typescript-eslint/no-unsafe-member-access
+  112:37  error    Unsafe member access .ch on an `any` value                                                                               @typescript-eslint/no-unsafe-member-access
+  113:23  error    Unsafe member access .line on an `any` value                                                                             @typescript-eslint/no-unsafe-member-access
+  113:35  error    Unsafe member access .line on an `any` value                                                                             @typescript-eslint/no-unsafe-member-access
+  114:23  error    Unsafe member access .ch on an `any` value                                                                               @typescript-eslint/no-unsafe-member-access
+  114:33  error    Unsafe member access .ch on an `any` value                                                                               @typescript-eslint/no-unsafe-member-access
+  118:23  error    Unsafe assignment of an `any` value                                                                                      @typescript-eslint/no-unsafe-assignment
+  118:29  error    Unsafe assignment of an `any` value                                                                                      @typescript-eslint/no-unsafe-assignment
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\ui\inline-menu.ts
+  103:3   error    Avoid setting styles directly via `element.style.display`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically        obsidianmd/no-static-styles-assignment
+  110:3   error    Avoid setting styles directly via `element.style.display`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically        obsidianmd/no-static-styles-assignment
+  111:3   error    Avoid setting styles directly via `element.style.position`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically       obsidianmd/no-static-styles-assignment
+  112:3   error    Avoid setting styles directly via `element.style.zIndex`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically         obsidianmd/no-static-styles-assignment
+  113:3   error    Avoid setting styles directly via `element.style.pointerEvents`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically  obsidianmd/no-static-styles-assignment
+  134:9   error    Unsafe assignment of an `any` value                                                                                                                                                                       @typescript-eslint/no-unsafe-assignment
+  134:25  warning  Unexpected any. Specify a different type                                                                                                                                                                  @typescript-eslint/no-explicit-any
+  134:30  error    Unsafe member access .cm on an `any` value                                                                                                                                                                @typescript-eslint/no-unsafe-member-access
+  138:9   error    Unsafe assignment of an `any` value                                                                                                                                                                       @typescript-eslint/no-unsafe-assignment
+  138:18  error    Unsafe call of an `any` typed value                                                                                                                                                                       @typescript-eslint/no-unsafe-call
+  138:21  error    Unsafe member access .cursorCoords on an `any` value                                                                                                                                                      @typescript-eslint/no-unsafe-member-access
+  144:22  error    Unsafe member access .bottom on an `any` value                                                                                                                                                            @typescript-eslint/no-unsafe-member-access
+  145:23  error    Unsafe member access .left on an `any` value                                                                                                                                                              @typescript-eslint/no-unsafe-member-access
+  219:4   error    Promises must be awaited, end with a call to .catch, end with a call to .then with a rejection handler or be explicitly marked as ignored with the `void` operator                                        @typescript-eslint/no-floating-promises
+  242:36  error    Promise returned in function argument where a void return was expected                                                                                                                                    @typescript-eslint/no-misused-promises
+  251:4   error    Avoid setting styles directly via `element.style.display`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically        obsidianmd/no-static-styles-assignment
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\ui\note-autocomplete.test.ts
+  1:32  warning  'vi' is defined but never used          @typescript-eslint/no-unused-vars
+  1:36  warning  'beforeEach' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\ui\note-autocomplete.ts
+   63:3  error  Avoid setting styles directly via `element.style.display`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically    obsidianmd/no-static-styles-assignment
+  170:3  error  Avoid setting styles directly via `element.style.display`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically    obsidianmd/no-static-styles-assignment
+  182:3  error  Avoid setting styles directly via `element.style.display`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically    obsidianmd/no-static-styles-assignment
+  336:3  error  Avoid setting styles directly via `element.style.position`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically   obsidianmd/no-static-styles-assignment
+  339:3  error  Avoid setting styles directly via `element.style.zIndex`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically     obsidianmd/no-static-styles-assignment
+  340:3  error  Avoid setting styles directly via `element.style.maxHeight`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically  obsidianmd/no-static-styles-assignment
+  341:3  error  Avoid setting styles directly via `element.style.width`. Use CSS classes for better theming and maintainability. Use the `setCssProps` function if the CSS properties need to change dynamically      obsidianmd/no-static-styles-assignment
+
+C:\Users\IDTOTAL ACTIVE\Documents\ObsidianDev\.obsidian\plugins\ObsAIde\src\ui\response-workflows.test.ts
+   1:32  warning  'vi' is defined but never used    @typescript-eslint/no-unused-vars
+  34:30  error    Unnecessary escape character: \/  no-useless-escape
+
+✖ 81 problems (51 errors, 30 warnings)
+  0 errors and 15 warnings potentially fixable with the `--fix` option.
+

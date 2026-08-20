@@ -4,7 +4,6 @@ import type { AideMode } from '../prompts/system';
 import type { ChatMessage, ProviderId } from '../providers/types';
 import { createId } from '../utils/id';
 import { summarize } from '../utils/text';
-import type { QuizState } from './quiz';
 
 export interface MessageError {
 	kind: string;
@@ -52,8 +51,6 @@ export interface Conversation {
 	updatedAt: number;
 	mode: AideMode;
 	messages: ConversationMessage[];
-	/** Quiz state when mode is 'quiz'. */
-	quizState?: QuizState;
 	/** Branch metadata. */
 	parentConversationId?: string;
 	branchedFromMessageId?: string;

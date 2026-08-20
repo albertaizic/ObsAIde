@@ -4,7 +4,7 @@ import { ASSISTANT_NAME } from '../constants';
  * All persistent instruction text lives here rather than being scattered
  * through the UI, so prompt wording can be reviewed in one place.
  */
-export type AideMode = 'chat' | 'tutor' | 'quiz';
+export type AideMode = 'chat' | 'tutor';
 
 /** User-facing response length preference. */
 export type ResponseLength = 'short' | 'normal' | 'detailed';
@@ -70,14 +70,10 @@ export interface SystemPromptOptions {
 	profileInstructions?: string;
 }
 
-import { QUIZ_SYSTEM_PROMPT_ADDITION } from '../chat/quiz';
-
 export function buildSystemPrompt(options: SystemPromptOptions): string {
 	let basePrompt: string;
 	if (options.mode === 'tutor') {
 		basePrompt = TUTOR;
-	} else if (options.mode === 'quiz') {
-		basePrompt = BASE + '\n\n' + QUIZ_SYSTEM_PROMPT_ADDITION;
 	} else {
 		basePrompt = BASE;
 	}

@@ -29,11 +29,10 @@ ObsAIde talks directly to the provider you choose — OpenRouter, OpenAI, Anthro
 
 ### New in 0.3.0
 
-- **Vault Search** — search across your Markdown notes by title, path, headings, or content. Results are ranked by relevance (title/phrase matches first), shown in a modal with snippets, and you choose which notes become context. No background indexing, no embeddings, fully local.
-- **Interactive Quiz Mode** — start a quiz from attached notes (selection, section, note, folder, or vault search results). Configure question count (5/10/15/unlimited), difficulty (easy/medium/hard/mixed), and style (short answer/multiple choice/mixed). Aide asks one question at a time, you answer, it grades with feedback, and continues. Shows progress and final score with topics to review. Quiz state persists in the conversation.
-- **Wikilink Suggestions** — for the current selection, section, or note, Aide discovers existing notes by title/aliases/headings, ranks them by relevance, and suggests `[[wikilinks]]` with the source phrase. You review and apply with aliases (`[[Target|source phrase]]`). Skips code blocks, inline code, frontmatter, and existing links.
 - **Conversation Branching** — from any message in a conversation, choose "Branch from here" to create a new conversation with history up to that point. The original remains untouched. Branches persist independently with parent metadata.
 - **Assistant Profiles** — named reusable configurations (General, Tutor, Writer, Coding Assistant, Researcher) with custom instructions, optional provider/model override, and response length. Create custom profiles, switch per conversation. Tutor mode is now the Tutor profile. Profiles and custom actions remain separate concepts.
+- **Create Quiz Note** — generate a study quiz from attached notes (selection, section, note, or folder). Configure question count (5/10/15/20), difficulty (easy/medium/hard/mixed), and type (short answer/multiple choice/mixed). Includes optional answer key. Outputs a normal `.md` note in a folder of your choice.
+- **Wikilink Suggestions** — for the current selection, section, or note, Aide discovers existing notes by title/aliases/headings, ranks them by relevance, and suggests `[[wikilinks]]` with the source phrase. You review and apply with aliases (`[[Target|source phrase]]`). Skips code blocks, inline code, frontmatter, and existing links.
 
 ## Screenshots
 
@@ -148,6 +147,39 @@ The target note is decided when you *ask*, not when you click. ObsAIde records t
 
 If the note changed in the meantime, ObsAIde says so and looks the original text up once by content. If it is gone or ambiguous, the replace options disappear and only insert and copy remain. If the note is no longer open at all, insertion is hidden entirely rather than writing to whatever happens to be in front of you.
 
+### Conversation history and branching
+
+Open **Recent conversations…** from the sidebar overflow menu to see your history. Each entry shows the title, branch indicator (↳ branch), message count and age. Click to reopen. A **Delete** action with confirmation is available on each entry without opening the conversation.
+
+**Branching**: from any assistant or user message, choose **Branch from here** to create a new conversation that copies history up to that point. The original conversation is unaffected. Branches show `↳ branch` in the history list.
+
+### Assistant profiles
+
+Open the **Profiles** section in Settings. Built-in profiles: General, Tutor, Writer, Coding Assistant, Researcher. Each has its own instructions, optional provider/model override, and response length. Create custom profiles, enable/disable them, and set the active profile per conversation. The active profile is shown in the sidebar header.
+
+### Create quiz note
+
+Attach some notes (selection, section, note, or folder), open the sidebar overflow menu, choose **Create quiz note…**. Configure:
+
+- **Questions**: 5 / 10 / 15 / 20
+- **Difficulty**: Easy / Medium / Hard / Mixed
+- **Type**: Short answer / Multiple choice / Mixed
+- **Include answer key**: yes/no
+- **Name**: e.g., "Binary Search Quiz"
+- **Folder**: destination folder in your vault
+
+Aide generates the quiz in one request, grounded in your attached notes, and creates a `.md` file with frontmatter (`source: ObsAIde`, `type: quiz`). The note opens automatically.
+
+### Wikilink suggestions
+
+Open a Markdown note, optionally select text (or use a section/note scope), run **Suggest wikilinks…** from the sidebar overflow menu or the inline ✨ Aide menu. Aide scans your vault for candidate notes (by filename, title, aliases, headings), filters out already-linked notes, and shows a review modal with:
+
+- Target note title and path
+- Source phrase in your text
+- Reason/confidence
+
+Check the ones you want, click **Apply selected**. Aide wraps the source phrase in `[[Target|phrase]]` (or `[[Target]]` if the phrase matches the title). Protected regions are skipped: code blocks, inline code, frontmatter, existing wikilinks, and Markdown links.
+
 ## Note context
 
 Context is always something you attached:
@@ -229,7 +261,7 @@ The editor context menu adds **Ask Aide about this** and **Aide actions…**.
 | --- | --- |
 | Default provider | Also switchable from the sidebar header |
 | Custom instructions | Appended to the system prompt on every request |
-| Tutor mode by default | New conversations start in tutor mode |
+| Tutor mode by default | New conversations start in tutor mode (legacy, migrated to Tutor profile) |
 | Stream responses | Falls back to a buffered request where streaming is unavailable |
 | Temperature / creativity | `0.0`–`1.0`, default `0.3`. Clamped per provider, and omitted entirely for models that reject it |
 | Maximum response length | A cap, not a target: length is governed by the prompt |
@@ -288,7 +320,6 @@ Adding a provider means writing one adapter and one catalogue entry. Adding a no
 
 - **Markdown only, by design.** No images, PDFs, CSVs or provider-native file uploads. ObsAIde attaches Obsidian notes.
 - **Text only.** No image input, tool use or function calling.
-- **Local keyword search only.** Vault Search uses title/heading/content keyword matching — not semantic/embedding search. It cannot answer "which note discusses the concept of X" without matching keywords.
 - **Insertion requires the note to be open.** If the originating note has been closed, insert options are hidden and only copy remains.
 - **Streaming depends on the environment.** Where the renderer blocks a cross-origin streaming request, replies arrive all at once.
 - **Model lists are the provider's.** A listing that includes non-chat models will show them.
