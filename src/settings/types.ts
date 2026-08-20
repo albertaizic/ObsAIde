@@ -141,7 +141,7 @@ export function createDefaultSettings(): ObsAideSettings {
 		maxContextChars: 48_000,
 		responseLength: 'normal',
 		customActions: [],
-		contextScope: 'selection',
+		contextScope: 'none',
 		profiles: [],
 		activeProfileId: 'general',
 	};

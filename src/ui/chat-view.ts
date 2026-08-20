@@ -559,14 +559,18 @@ export class AideChatView extends ItemView {
 		const scope = this.controller.getSettings().contextScope ?? 'selection';
 		if (scope === 'none') {
 			this.composer.setAttachments(this.attachments);
+			this.composer.setScope('none');
 			return;
 		}
 
 		const target = getEditorTarget(this.app);
 		if (!target) {
 			this.composer.setAttachments(this.attachments);
+			this.composer.setScope(scope, 'no editor');
 			return;
 		}
+
+		let contextInfo = '';
 
 		if (scope === 'selection') {
 			// Nothing selected means nothing is sent for this scope — never swap
@@ -577,6 +581,9 @@ export class AideChatView extends ItemView {
 				if (target.file) {
 					this.addAttachment(captureNote(target.file, 'supporting'));
 				}
+				contextInfo = (selection.text ?? '').length > 0 ? 'selected' : 'none selected';
+			} else {
+				contextInfo = 'none selected';
 			}
 		} else if (scope === 'section') {
 			// Use preserved editor context if available (captured before sidebar took focus)
@@ -584,11 +591,20 @@ export class AideChatView extends ItemView {
 			const editor = editorContext?.editor ?? target.editor;
 			const file = editorContext?.file ?? target.file;
 			const sectionAttach = captureSection(this.app, editor, file, 'primary');
-			if (sectionAttach) this.addAttachment(sectionAttach);
+			if (sectionAttach) {
+				this.addAttachment(sectionAttach);
+				contextInfo = sectionAttach.title || 'section';
+			} else {
+				contextInfo = 'no section';
+			}
 		} else if (scope === 'note' && target.file) {
 			this.addAttachment(captureNote(target.file, 'primary'));
+			contextInfo = target.file.basename;
 		} else if (scope === 'linked' && target.file) {
 			await this.addLinkedNotes(target.file);
+			// Count note attachments added by linked scope (all have role 'primary')
+			const linkedNotes = this.attachments.filter(a => a.kind === 'note');
+			contextInfo = `${linkedNotes.length}`;
 		} else if (scope === 'folder') {
 			// A folder attachment from a prior selection is kept (see the
 			// `manualAttachments` filter above); otherwise there is nothing to
@@ -598,13 +614,16 @@ export class AideChatView extends ItemView {
 				new FolderPickerModal(this.app, (folder) => {
 					this.addAttachment(captureFolder(this.app, folder));
 					this.composer.setAttachments(this.attachments);
-					this.composer.setScope(scope);
+					this.composer.setScope(scope, folder.name || folder.path);
 				}).open();
+				return;
 			}
+			const folderAttach = this.attachments.find(a => a.kind === 'folder');
+			if (folderAttach) contextInfo = folderAttach.title ?? folderAttach.path ?? 'folder';
 		}
 
 		this.composer.setAttachments(this.attachments);
-		this.composer.setScope(scope);
+		this.composer.setScope(scope, contextInfo);
 	}
 
 	/** Vault paths already covered by the current attachments, so a linked-note offer never repeats them. */
@@ -753,7 +772,7 @@ export class AideChatView extends ItemView {
 				modal.close();
 			} else {
 				// Re-enable the modal controls on failure
-				modal.setLoading(false);
+				modal.setGenerationFailed();
 			}
 		});
 		modal.open();
@@ -812,14 +831,15 @@ export class AideChatView extends ItemView {
 				return;
 			}
 
-			// Show the modal
+			// Show the modal with loading state
 			const modal = new WikilinkSuggestionsModal(this.app, {
 				sourceText,
 				file,
 				onApply: (newText) => void this.applyWikilinks(file, newText),
 			});
-			modal.setSuggestions(suggestions);
 			modal.open();
+			modal.showLoading();
+			modal.setSuggestions(suggestions);
 		} catch (error) {
 			new Notice('Wikilink suggestion failed: ' + String(error));
 		}
@@ -1054,6 +1074,46 @@ export class AideChatView extends ItemView {
 		this.providerModelButton.toggleClass('is-unconfigured', !configured);
 
 		this.modeBadge.toggleClass('is-visible', conversation.mode === 'tutor');
+
+		// Update context scope label
+		const scope = this.controller.getSettings().contextScope ?? 'none';
+		if (scope === 'none') {
+			this.composer.setScope('none');
+		} else {
+			// Recompute context info for display
+			const target = getEditorTarget(this.app);
+			let contextInfo = '';
+			if (target) {
+				if (scope === 'selection') {
+					const selection = target.editor.getSelection().trim();
+					contextInfo = selection ? 'selected' : 'none selected';
+				} else if (scope === 'section' && target.file) {
+					const editorContext = this.lastEditorContext;
+					const editor = editorContext?.editor ?? target.editor;
+					const file = editorContext?.file ?? target.file;
+					const result = extractCurrentSection(this.app, editor, file);
+					contextInfo = result.section ? result.breadcrumb : 'no section';
+				} else if (scope === 'note' && target.file) {
+					contextInfo = target.file.basename;
+				} else if (scope === 'linked' && target.file) {
+					const linkSourcePaths = this.attachments
+						.filter((a) => a.kind === 'note' && a.path)
+						.map((a) => a.path!);
+					const sourcePaths = linkSourcePaths.length > 0 ? linkSourcePaths : [target.file.path];
+					const sourceFiles = sourcePaths
+						.map((path) => this.app.vault.getAbstractFileByPath(path))
+						.filter((f): f is TFile => f instanceof TFile);
+					const linkedCount = resolveLinkedNotes(this.app, sourceFiles, this.attachedPaths()).length;
+					contextInfo = `${linkedCount}`;
+				} else if (scope === 'folder') {
+					const folderAttach = this.attachments.find(a => a.kind === 'folder');
+					contextInfo = folderAttach?.title || folderAttach?.path || 'no folder';
+				}
+			} else {
+				contextInfo = 'no editor';
+			}
+			this.composer.setScope(scope, contextInfo);
+		}
 	}
 
 	private renderEmptyState(parent: HTMLElement): void {
@@ -1138,14 +1198,14 @@ export class AideChatView extends ItemView {
 			profileInstructions: activeProfile.instructions,
 		});
 
-		// Build the quiz generation prompt
+		// Build the quiz generation prompt with strict format requirements
 		const difficultyInstruction = this.getDifficultyInstruction(options.difficulty);
 		const typeInstruction = this.getTypeInstruction(options.type);
 		const answerKeyInstruction = options.includeAnswerKey
-			? 'Include an "Answer Key" section at the end with answers to all questions.'
-			: 'Do NOT include answers. Questions only.';
+			? 'For EACH question, include a collapsible answer callout directly after the question using this EXACT format:\n> [!answer]- ✅ Answer\n> Answer text here.\n\nThe "-" after "[!answer]" is REQUIRED to make answers start collapsed.'
+			: 'Do NOT include any answers. Questions only.';
 
-		const userPrompt = `${contextBlock}\n\nGenerate a study quiz based ONLY on the provided context.\n\nRequirements:\n- ${options.questionCount} questions\n- ${difficultyInstruction}\n- ${typeInstruction}\n- ${answerKeyInstruction}\n- Use clear Markdown formatting\n- Ground every question in the provided context — do not invent material\n- If the context is insufficient for a question, skip that topic\n\nOutput only the quiz as Markdown.`;
+		const userPrompt = `${contextBlock}\n\nGenerate a study quiz based ONLY on the provided context.\n\nSTRICT FORMAT REQUIREMENTS:\n- Output EXACTLY ${options.questionCount} questions\n- Each question MUST start with "## Problem N" where N is 1, 2, 3...\n- Question text MUST be bold: "**Question text?**"\n- ${typeInstruction}\n- ${difficultyInstruction}\n- ${answerKeyInstruction}\n- NO introductory text, NO concluding text, NO "Here is your quiz", NO code fences around the whole output\n- NO separate "Answer Key" section at the end when answers are enabled\n- Ground every question in the provided context — do not invent material\n- If context is insufficient for a question, skip that topic but maintain numbering\n\nOutput ONLY the quiz as Markdown.`;
 
 		try {
 			const result = await this.plugin.providers.complete({
@@ -1161,9 +1221,17 @@ export class AideChatView extends ItemView {
 				return false;
 			}
 
-			// Add frontmatter
+			// Validate quiz format before creating note
+			const validation = this.validateQuizFormat(quizContent, options.questionCount, options.includeAnswerKey);
+			if (!validation.valid) {
+				new Notice(`Quiz format invalid: ${validation.error}`);
+				return false;
+			}
+
+			// Add frontmatter with title
 			const frontmatter = `---\ncreated: ${new Date().toISOString().split('T')[0]}\nsource: ObsAIde\ntype: quiz\n---\n\n`;
-			const fullContent = frontmatter + quizContent;
+			const titleLine = `# ${options.name}\n\n`;
+			const fullContent = frontmatter + titleLine + quizContent;
 
 			// Create the note
 			const folderPath = options.folderPath.trim();
@@ -1191,6 +1259,46 @@ export class AideChatView extends ItemView {
 		}
 	}
 
+	/**
+	 * Validate that the generated quiz matches the required format.
+	 */
+	private validateQuizFormat(content: string, expectedCount: number, includeAnswers: boolean): { valid: boolean; error?: string } {
+		// Check for code fences wrapping the whole content
+		if (content.startsWith('```')) {
+			return { valid: false, error: 'Response wrapped in code fence' };
+		}
+
+		// Count "## Problem N" headings
+		const problemMatches = content.match(/^## Problem \d+/gm);
+		const problemCount = problemMatches ? problemMatches.length : 0;
+		if (problemCount !== expectedCount) {
+			return { valid: false, error: `Expected ${expectedCount} problems, found ${problemCount}` };
+		}
+
+		// Check each problem has bold question text
+		const boldQuestionMatches = content.match(/\*\*[^*]+\?\*\*/g);
+		const boldQuestionCount = boldQuestionMatches ? boldQuestionMatches.length : 0;
+		if (boldQuestionCount < expectedCount) {
+			return { valid: false, error: 'Missing bold question text' };
+		}
+
+		// If answers enabled, check for answer callouts
+		if (includeAnswers) {
+			const answerCalloutMatches = content.match(/^> \[!answer\]- ✅ Answer/mg);
+			const answerCount = answerCalloutMatches ? answerCalloutMatches.length : 0;
+			if (answerCount !== expectedCount) {
+				return { valid: false, error: `Expected ${expectedCount} answer callouts, found ${answerCount}` };
+			}
+		}
+
+		// Check no separate Answer Key section
+		if (content.includes('Answer Key') || content.includes('answer key') || content.includes('ANSWER KEY')) {
+			return { valid: false, error: 'Contains separate Answer Key section' };
+		}
+
+		return { valid: true };
+	}
+
 	private getDifficultyInstruction(difficulty: QuizNoteOptions['difficulty']): string {
 		switch (difficulty) {
 			case 'easy':
@@ -1210,10 +1318,10 @@ export class AideChatView extends ItemView {
 			case 'short-answer':
 				return 'Format: Short answer — open-ended questions';
 			case 'multiple-choice':
-				return 'Format: Multiple choice — provide 4 options (A, B, C, D) with each question';
+				return 'Format: Multiple choice — each question MUST have 4 options labeled A, B, C, D as a Markdown list:\n- A. Option\n- B. Option\n- C. Option\n- D. Option';
 			case 'mixed':
 			default:
-				return 'Format: Mixed — alternate between short answer and multiple choice';
+				return 'Format: Mixed — alternate between short answer and multiple choice questions';
 		}
 	}
 }

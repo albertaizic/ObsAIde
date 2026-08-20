@@ -228,12 +228,14 @@ export class Composer {
 	/** Update the response length button label. */
 	setLength(length: 'short' | 'normal' | 'detailed'): void {
 		const labels: Record<string, string> = { short: 'Short', normal: 'Normal', detailed: 'Detailed' };
-		this.lengthButton.setText(labels[length] ?? 'Normal');
+		// Show "Length: Normal" when space permits, otherwise just "Normal"
+		const isCompact = this.lengthButton.offsetWidth < 100;
+		this.lengthButton.setText(isCompact ? labels[length] ?? 'Normal' : `Length: ${labels[length] ?? 'Normal'}`);
 		setTooltip(this.lengthButton, `Response length: ${labels[length]}. Click to change.`);
 	}
 
-	/** Update the context scope button label. */
-	setScope(scope: 'none' | 'selection' | 'section' | 'note' | 'linked' | 'folder'): void {
+	/** Update the context scope button label with descriptive text. */
+	setScope(scope: 'none' | 'selection' | 'section' | 'note' | 'linked' | 'folder', contextInfo?: string): void {
 		const labels: Record<string, string> = {
 			none: 'None',
 			selection: 'Selection',
@@ -242,8 +244,17 @@ export class Composer {
 			linked: 'Linked notes',
 			folder: 'Folder',
 		};
-		this.scopeButton.setText(labels[scope] ?? 'Selection');
-		setTooltip(this.scopeButton, `Context scope: ${labels[scope]}. Click to change.`);
+		const baseLabel = labels[scope] ?? 'None';
+		let displayText: string;
+		if (scope === 'none') {
+			displayText = 'Context: None';
+		} else if (contextInfo) {
+			displayText = `Context: ${baseLabel} · ${contextInfo}`;
+		} else {
+			displayText = `Context: ${baseLabel}`;
+		}
+		this.scopeButton.setText(displayText);
+		setTooltip(this.scopeButton, `Context scope: ${baseLabel}${contextInfo ? ` (${contextInfo})` : ''}. Click to change.`);
 	}
 
 	private showLengthMenu(): void {
