@@ -183,6 +183,16 @@ export class ChatController {
 		else this.emit('conversation');
 	}
 
+	/** Rename a conversation. */
+	renameConversation(id: string, newTitle: string): void {
+		const conversation = this.deps.store.get(id);
+		if (conversation) {
+			conversation.title = newTitle;
+			this.deps.store.touch(conversation);
+			this.emit('structure');
+		}
+	}
+
 	setMode(mode: AideMode): void {
 		this.conversation.mode = mode;
 		this.deps.store.touch(this.conversation);
@@ -215,6 +225,17 @@ export class ChatController {
 		this.conversation = branch;
 		this.deps.store.touch(this.conversation);
 		this.emit('conversation');
+	}
+
+	/** Branch from the last message of a conversation (by ID). */
+	branchFromConversation(id: string): void {
+		const conversation = this.deps.store.get(id);
+		if (!conversation || conversation.messages.length === 0) return;
+		// Find the last message (user or assistant)
+		const lastMessage = [...conversation.messages].reverse().find(m => m.role === 'user' || m.role === 'assistant');
+		if (!lastMessage) return;
+		this.openConversation(id);
+		this.branchFromMessage(lastMessage.id);
 	}
 
 	// --- generation ---------------------------------------------------------
