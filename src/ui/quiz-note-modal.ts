@@ -31,6 +31,7 @@ export class QuizNoteModal extends Modal {
 	private name = '';
 	private folderButton!: HTMLButtonElement;
 	private createButton!: HTMLButtonElement;
+	private cancelButton!: HTMLButtonElement;
 	private isLoading = false;
 
 	constructor(
@@ -141,8 +142,8 @@ export class QuizNoteModal extends Modal {
 			.setHeading();
 
 		new Setting(outputSection)
-			.setName('Include answer key')
-			.setDesc('Append an answer key section at the end of the note')
+			.setName('Include answers')
+			.setDesc('Show collapsible answer callout under each question (recommended for study)')
 			.addToggle((toggle) => {
 				toggle.setValue(true);
 				toggle.onChange((value) => {
@@ -191,11 +192,25 @@ export class QuizNoteModal extends Modal {
 		});
 		this.createButton.addEventListener('click', () => this.handleCreate());
 
-		buttons.createEl('button', {
+		this.cancelButton = buttons.createEl('button', {
 			cls: 'obsaide-button',
 			text: 'Cancel',
-		}).addEventListener('click', () => this.close());
+		});
+		this.cancelButton.addEventListener('click', () => this.close());
+
+		// Prevent Escape key from closing during generation
+		const handleKeydown = (e: KeyboardEvent) => {
+			if (this.isLoading && e.key === 'Escape') {
+				e.preventDefault();
+				e.stopPropagation();
+			}
+		};
+		this.contentEl.addEventListener('keydown', handleKeydown);
+		// Store handler to remove on close
+		this.keydownHandler = handleKeydown;
 	}
+
+	private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
 
 	private questionCount = 10;
 	private difficulty: QuizNoteOptions['difficulty'] = 'mixed';
@@ -216,11 +231,14 @@ export class QuizNoteModal extends Modal {
 		this.isLoading = loading;
 		this.createButton.disabled = loading;
 		this.createButton.setText(loading ? 'Creating quiz…' : 'Create quiz note');
+		this.cancelButton.toggleClass('is-hidden', loading);
 		this.loadingIndicator.toggleClass('is-hidden', !loading);
 		if (loading) {
 			this.loadingIndicator.empty();
 			this.loadingIndicator.createDiv({ cls: 'obsaide-spinner' });
-			this.loadingIndicator.createSpan({ text: 'Generating quiz…' });
+			// Show which file(s) are being used
+			const sourceNames = this.attachments.map(a => a.title).join(', ');
+			this.loadingIndicator.createSpan({ text: `Generating ${this.questionCount} questions from: ${sourceNames}` });
 		}
 	}
 
@@ -250,7 +268,22 @@ export class QuizNoteModal extends Modal {
 		void this.onSubmit(options);
 	}
 
+	/** Called on generation failure to restore controls */
+	setGenerationFailed(): void {
+		this.isLoading = false;
+		this.createButton.disabled = false;
+		this.createButton.setText('Create quiz note');
+		this.cancelButton.toggleClass('is-hidden', false);
+		this.loadingIndicator.toggleClass('is-hidden', true);
+	}
+
 	override onClose(): void {
+		// Prevent closing during generation
+		if (this.isLoading) return;
+		if (this.keydownHandler) {
+			this.contentEl.removeEventListener('keydown', this.keydownHandler);
+			this.keydownHandler = null;
+		}
 		this.contentEl.empty();
 	}
 }
