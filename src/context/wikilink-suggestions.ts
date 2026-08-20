@@ -24,6 +24,8 @@ export interface WikilinkSuggestion {
 	confidence: number;
 	/** Reason for the suggestion. */
 	reason: string;
+	/** Optional custom replacement text (e.g., AI-suggested rewrite with wikilink). */
+	replacement?: string;
 }
 
 /** Options for discovering candidates. */

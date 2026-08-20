@@ -228,9 +228,8 @@ export class Composer {
 	/** Update the response length button label. */
 	setLength(length: 'short' | 'normal' | 'detailed'): void {
 		const labels: Record<string, string> = { short: 'Short', normal: 'Normal', detailed: 'Detailed' };
-		// Show "Length: Normal" when space permits, otherwise just "Normal"
-		const isCompact = this.lengthButton.offsetWidth < 100;
-		this.lengthButton.setText(isCompact ? labels[length] ?? 'Normal' : `Length: ${labels[length] ?? 'Normal'}`);
+		// Always show "Length: Normal" format - do not use compact mode
+		this.lengthButton.setText(`Length: ${labels[length] ?? 'Normal'}`);
 		setTooltip(this.lengthButton, `Response length: ${labels[length]}. Click to change.`);
 	}
 

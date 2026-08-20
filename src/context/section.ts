@@ -194,7 +194,8 @@ export function getSectionBreadcrumbFull(
 
 /**
  * Extract the current Markdown section from the editor.
- * Returns the section content with its heading, or the whole note if no headings.
+ * Returns the section content with its heading, parent intro, and subsections.
+ * Excludes sibling sections.
  */
 export function extractCurrentSection(
 	app: App,
@@ -266,11 +267,25 @@ export function extractCurrentSection(
 
 	const breadcrumb = getSectionBreadcrumbFull(sections, section);
 
-	// Build full section content including heading and subsections
-	let fullSectionContent = `${'#'.repeat(section.heading.level)} ${section.heading.text}\n\n`;
+	// Build full section content with:
+	// 1. Heading ancestry context (parent introductory text)
+	// 2. Current section heading + content
+	// 3. Subsections of current section
+	// EXCLUDES: sibling sections
+
+	let fullSectionContent = '';
+
+	// Add parent introductory text (content between parent heading and first child)
+	const parentIntro = getParentIntroductoryText(section, lines);
+	if (parentIntro) {
+		fullSectionContent += `${parentIntro}\n\n`;
+	}
+
+	// Add current section heading and content
+	fullSectionContent += `${'#'.repeat(section.heading.level)} ${section.heading.text}\n\n`;
 	fullSectionContent += section.content;
 
-	// Include subsections
+	// Include subsections of current section
 	for (const sub of section.subsections) {
 		fullSectionContent += `\n\n${'#'.repeat(sub.heading.level)} ${sub.heading.text}\n\n${sub.content}`;
 	}
@@ -280,6 +295,28 @@ export function extractCurrentSection(
 		breadcrumb,
 		fullContent: fullSectionContent.trim(),
 	};
+}
+
+/**
+ * Get the introductory text of the parent section (text between parent heading
+ * and its first child heading). Returns empty string if no parent or no intro.
+ */
+function getParentIntroductoryText(section: MarkdownSection, lines: string[]): string {
+	if (!section.parent) return '';
+
+	const parent = section.parent;
+	const start = parent.startLine + 1; // After parent heading
+	const firstSub = parent.subsections[0];
+	const end = firstSub ? firstSub.startLine : parent.endLine;
+
+	const introLines = lines.slice(start, end);
+	const intro = introLines.join('\n').trim();
+
+	if (!intro) return '';
+
+	// Format as the parent heading with its intro text
+	const headingLine = `${'#'.repeat(parent.heading.level)} ${parent.heading.text}`;
+	return `${headingLine}\n\n${intro}`;
 }
 
 /**

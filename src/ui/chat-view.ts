@@ -53,8 +53,8 @@ import { NotePickerModal } from './note-picker';
 import { PromptModal } from './prompt-modal';
 import { QuizNoteModal, type QuizNoteOptions } from './quiz-note-modal';
 import { WikilinkSuggestionsModal } from './wikilink-suggestions-modal';
+import { WikilinkSetupModal } from './wikilink-setup-modal';
 import { BottomScroller } from './scroller';
-import { discoverCandidates, generateSuggestions, filterExistingLinks } from '../context/wikilink-suggestions';
 import type ObsAidePlugin from '../main';
 
 const STREAM_RENDER_INTERVAL_MS = 90;
@@ -66,7 +66,8 @@ export class AideChatView extends ItemView {
 	private composer!: Composer;
 	private scroller!: BottomScroller;
 	private profileButton!: HTMLButtonElement;
-	private providerModelButton!: HTMLButtonElement;
+	private providerButton!: HTMLButtonElement;
+	private modelButton!: HTMLButtonElement;
 	private modeBadge!: HTMLElement;
 	private scrollerEl!: HTMLElement;
 	private flowEl!: HTMLElement;
@@ -295,16 +296,20 @@ export class AideChatView extends ItemView {
 		this.conversationTitleEl = header.createDiv({ cls: 'obsaide-conversation-title' });
 		this.conversationTitleEl.setAttribute('aria-live', 'polite');
 
-		// Row 2: Profile + Provider/Model compact row
+		// Row 2: Profile + Provider + Model
 		const runtimeRow = header.createDiv({ cls: 'obsaide-header-runtime' });
 
 		// Profile selector
 		this.profileButton = runtimeRow.createEl('button', { cls: 'obsaide-select is-profile' });
 		this.profileButton.addEventListener('click', () => this.showProfileMenu());
 
-		// Provider/Model combined selector
-		this.providerModelButton = runtimeRow.createEl('button', { cls: 'obsaide-select is-provider-model' });
-		this.providerModelButton.addEventListener('click', () => { void this.showProviderModelMenu(); });
+		// Provider selector
+		this.providerButton = runtimeRow.createEl('button', { cls: 'obsaide-select is-provider' });
+		this.providerButton.addEventListener('click', () => this.showProviderMenu());
+
+		// Model selector
+		this.modelButton = runtimeRow.createEl('button', { cls: 'obsaide-select is-model' });
+		this.modelButton.addEventListener('click', () => { void this.showModelMenu(); });
 
 		// Mode badge (tutor mode indicator)
 		this.modeBadge = runtimeRow.createSpan({ cls: 'obsaide-mode-badge', text: 'Tutor' });
@@ -437,16 +442,14 @@ export class AideChatView extends ItemView {
 		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
 	}
 
-	private async showProviderModelMenu(): Promise<void> {
+	private showProviderMenu(): void {
 		const menu = new Menu();
 		const settings = this.plugin.settings;
 		const available = this.plugin.providers.availableProviders();
 
-		// Provider section
 		if (available.length === 0) {
 			menu.addItem((item) => item.setTitle('No providers enabled').setDisabled(true));
 		} else {
-			menu.addItem((item) => item.setTitle('Provider').setDisabled(true));
 			for (const id of available) {
 				const configured = isProviderConfigured(settings, id);
 				menu.addItem((item) =>
@@ -463,16 +466,28 @@ export class AideChatView extends ItemView {
 		}
 
 		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle('Configure providers…')
+				.setIcon('settings')
+				.onClick(() => this.plugin.openSettings()),
+		);
 
-		// Model section (for current provider)
-		menu.addItem((item) => item.setTitle('Model').setDisabled(true));
+		const rect = this.providerButton.getBoundingClientRect();
+		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
+	}
+
+	private async showModelMenu(): Promise<void> {
+		const menu = new Menu();
 		const providerId = this.controller.providerId;
 		const currentModel = this.controller.model;
 
-		try {
-			const modelInfos = await this.plugin.providers.listModels(providerId);
-			const models = modelInfos.map(m => m.id);
+		const modelInfos = await this.plugin.providers.listModels(providerId);
+		const models = modelInfos.map(m => m.id);
 
+		if (models.length === 0) {
+			menu.addItem((item) => item.setTitle('No models available').setDisabled(true));
+		} else {
 			for (const model of models) {
 				menu.addItem((item) =>
 					item
@@ -481,12 +496,6 @@ export class AideChatView extends ItemView {
 						.onClick(() => void this.controller.setModel(model)),
 				);
 			}
-
-			if (models.length === 0) {
-				menu.addItem((item) => item.setTitle('No models available').setDisabled(true));
-			}
-		} catch {
-			menu.addItem((item) => item.setTitle('Failed to load models').setDisabled(true));
 		}
 
 		menu.addSeparator();
@@ -497,7 +506,7 @@ export class AideChatView extends ItemView {
 				.onClick(() => this.plugin.openSettings()),
 		);
 
-		const rect = this.providerModelButton.getBoundingClientRect();
+		const rect = this.modelButton.getBoundingClientRect();
 		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
 	}
 
@@ -749,7 +758,7 @@ export class AideChatView extends ItemView {
 			return;
 		}
 		new ConversationPickerModal(this.app, {
-			conversations,
+			store: this.plugin.conversations,
 			onChoose: (conversation) => {
 				// Empty conversation object signals "new conversation"
 				if (!conversation.id) {
@@ -779,70 +788,261 @@ export class AideChatView extends ItemView {
 	}
 
 	private async openWikilinkSuggestions(): Promise<void> {
-		// Get the active file
+		// Get the active file as default target
 		const activeFile = this.app.workspace.getActiveFile();
 		if (!activeFile) {
 			new Notice('Open a Markdown note to suggest wikilinks.');
 			return;
 		}
 
-		// Get the text content - use selection if available, otherwise use the note content
-		const target = getEditorTarget(this.app);
-		let sourceText = '';
-		if (target && target.editor.getSelection().trim().length > 0) {
-			sourceText = target.editor.getSelection();
-		} else {
-			// Use the note content (we'll read it)
-			try {
-				sourceText = await this.app.vault.cachedRead(activeFile);
-			} catch {
-				new Notice('Could not read the note.');
-				return;
-			}
-		}
+		// Open the setup modal to select targets and sources
+		new WikilinkSetupModal(this.app, (options) => {
+			void this.runWikilinkAnalysis(options);
+		}).open();
+	}
 
-		if (!sourceText.trim()) {
-			new Notice('The note is empty.');
+	private async runWikilinkAnalysis(options: {
+		targets: Array<{ file: TFile; selected: boolean }>;
+		sources: Array<{ file: TFile; selected: boolean }>;
+		sourceFolders: Array<{ folder: TFolder; selected: boolean; noteCount: number }>;
+	}): Promise<void> {
+		const selectedTargets = options.targets.filter(t => t.selected);
+
+		if (selectedTargets.length === 0) {
+			new Notice('Select at least one target note.');
 			return;
 		}
 
-		await this.showWikilinkSuggestions(activeFile, sourceText);
+		const hasSources = options.sources.some(s => s.selected) || options.sourceFolders.some(f => f.selected);
+		if (!hasSources) {
+			new Notice('Select at least one source note or folder.');
+			return;
+		}
+
+		// Collect all source files
+		const sourceFiles: TFile[] = [];
+		for (const source of options.sources.filter(s => s.selected)) {
+			sourceFiles.push(source.file);
+		}
+		for (const folder of options.sourceFolders.filter(f => f.selected)) {
+			const notes = this.app.vault.getMarkdownFiles().filter(f =>
+				f.path.startsWith(folder.folder.path + '/') || f.path === folder.folder.path
+			);
+			sourceFiles.push(...notes);
+		}
+
+		// Remove duplicates
+		const uniqueSourceFiles = Array.from(new Map(sourceFiles.map(f => [f.path, f])).values());
+
+		// For each target, run analysis
+		for (const target of selectedTargets) {
+			await this.analyzeTarget(target.file, uniqueSourceFiles);
+		}
 	}
 
-	private async showWikilinkSuggestions(file: TFile, sourceText: string): Promise<void> {
-		// Show loading notice immediately
-		new Notice('Finding wikilinks…');
+	private async analyzeTarget(targetFile: TFile, sourceFiles: TFile[]): Promise<void> {
+		// Read target content
+		const targetContent = await this.app.vault.cachedRead(targetFile);
+		if (!targetContent.trim()) {
+			new Notice(`Target note "${targetFile.basename}" is empty.`);
+			return;
+		}
+
+		// Read source contents (with budget limits)
+		const settings = this.controller.getSettings();
+		const sourceContents: Array<{ path: string; content: string }> = [];
+		let totalChars = 0;
+		const maxSourceChars = Math.min(settings.maxContextChars, 50000); // Cap for wikilink analysis
+
+		for (const sourceFile of sourceFiles) {
+			if (totalChars >= maxSourceChars) break;
+			try {
+				const content = await this.app.vault.cachedRead(sourceFile);
+				const remaining = maxSourceChars - totalChars;
+				const truncated = content.length > remaining ? content.slice(0, remaining) : content;
+				if (truncated.trim()) {
+					sourceContents.push({ path: sourceFile.path, content: truncated });
+					totalChars += truncated.length;
+				}
+			} catch {
+				// Skip unreadable files
+			}
+		}
+
+		if (sourceContents.length === 0) {
+			new Notice('No readable source content found.');
+			return;
+		}
+
+		// Build the AI prompt for semantic wikilink analysis
+		const systemPrompt = this.buildWikilinkSystemPrompt();
+		const userPrompt = this.buildWikilinkUserPrompt(targetFile, targetContent, sourceContents);
+
+		// Show loading
+		new Notice('Analyzing connections…');
 
 		try {
-			// Discover candidates from the vault
-			const candidates = await discoverCandidates(this.app, sourceText);
-			if (candidates.length === 0) {
-				new Notice('No matching notes found in the vault.');
-				return;
-			}
-
-			// Filter out already linked notes
-			const filteredCandidates = filterExistingLinks(candidates, sourceText);
-
-			// Generate suggestions
-			const suggestions = generateSuggestions(sourceText, filteredCandidates);
-			if (suggestions.length === 0) {
-				new Notice('No useful wikilinks found.');
-				return;
-			}
-
-			// Show the modal with loading state
-			const modal = new WikilinkSuggestionsModal(this.app, {
-				sourceText,
-				file,
-				onApply: (newText) => void this.applyWikilinks(file, newText),
+			const result = await this.plugin.providers.complete({
+				providerId: this.controller.providerId,
+				model: this.controller.model,
+				system: systemPrompt,
+				messages: [{ role: 'user', content: userPrompt }],
 			});
-			modal.open();
-			modal.showLoading();
-			modal.setSuggestions(suggestions);
+
+			// Parse structured suggestions from AI response
+			const suggestions = this.parseWikilinkSuggestions(result.text);
+			if (suggestions.length === 0) {
+				new Notice('No useful wikilink connections found.');
+				return;
+			}
+
+			// Filter out existing wikilinks in target
+			const filtered = suggestions.filter(s => !this.isAlreadyLinked(targetFile, s));
+
+			// Show review modal using existing diff infrastructure
+			await this.showWikilinkReview(targetFile, filtered);
 		} catch (error) {
-			new Notice('Wikilink suggestion failed: ' + String(error));
+			new Notice('Wikilink analysis failed: ' + String(error));
 		}
+	}
+
+	private buildWikilinkSystemPrompt(): string {
+		return `You are an expert at identifying meaningful conceptual connections between Markdown notes for wikilink insertion.
+
+Your task: Analyze a TARGET note against SOURCE notes and propose wikilinks that represent genuine conceptual relationships.
+
+Rules:
+1. Only suggest links representing genuine semantic relationships, not mere word overlap.
+2. Do not link generic/common words (e.g., "the", "is", "and", "binary", "search").
+3. Prefer linking specific concepts, algorithms, techniques, or named entities.
+4. Zero suggestions is valid if no meaningful connections exist.
+5. Do not force every source note into the target.
+6. Suggest natural phrase replacements or small rewrites when they improve flow.
+7. Avoid linking phrases that are already wikilinked.
+8. Output structured JSON only.
+
+Output format (strict JSON):
+{
+  "suggestions": [
+    {
+      "targetPhrase": "exact phrase in target note to link",
+      "linkTarget": "title of the source note to link to",
+      "replacement": "[[Link Target|exact phrase]] or [[Link Target]] or rewritten sentence with wikilink",
+      "reason": "brief explanation of the semantic connection",
+      "confidence": "high|medium|low"
+    }
+  ]
+}`;
+	}
+
+	private buildWikilinkUserPrompt(targetFile: TFile, targetContent: string, sourceContents: Array<{ path: string; content: string }>): string {
+		const sourceBlocks = sourceContents.map(s =>
+			`--- SOURCE: ${s.path} ---\n${s.content}`
+		).join('\n\n');
+
+		return `TARGET NOTE: ${targetFile.path}
+${targetContent}
+
+SOURCE NOTES:
+${sourceBlocks}
+
+Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual relationships where a wikilink in the TARGET would meaningfully connect to a SOURCE note. Output structured JSON as specified.`;
+	}
+
+	private parseWikilinkSuggestions(response: string): Array<{
+		targetPhrase: string;
+		linkTarget: string;
+		replacement: string;
+		reason: string;
+		confidence: 'high' | 'medium' | 'low';
+	}> {
+		try {
+			// Try to extract JSON from response (might be wrapped in code fences)
+			let jsonText = response.trim();
+			if (jsonText.startsWith('```')) {
+				const fenceEnd = jsonText.indexOf('\n');
+				if (fenceEnd !== -1) {
+					jsonText = jsonText.slice(fenceEnd + 1);
+					const endFence = jsonText.lastIndexOf('```');
+					if (endFence !== -1) {
+						jsonText = jsonText.slice(0, endFence);
+					}
+				}
+			}
+			interface RawSuggestion {
+		targetPhrase: unknown;
+		linkTarget: unknown;
+		replacement: unknown;
+		reason: unknown;
+		confidence: unknown;
+	}
+
+	// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- JSON.parse returns any
+	const parsed: { suggestions: unknown } = JSON.parse(jsonText);
+	if (!parsed.suggestions || !Array.isArray(parsed.suggestions)) return [];
+
+	const raw = parsed.suggestions as RawSuggestion[];
+	return raw
+		.filter((s): s is RawSuggestion & { targetPhrase: string; linkTarget: string; replacement: string; reason: string; confidence: 'high' | 'medium' | 'low' } =>
+			typeof s.targetPhrase === 'string' &&
+			typeof s.linkTarget === 'string' &&
+			typeof s.replacement === 'string' &&
+			typeof s.reason === 'string' &&
+			typeof s.confidence === 'string' &&
+			['high', 'medium', 'low'].includes(s.confidence)
+		)
+		.map((s: RawSuggestion & { targetPhrase: string; linkTarget: string; replacement: string; reason: string; confidence: 'high' | 'medium' | 'low' }) => ({
+			targetPhrase: s.targetPhrase,
+			linkTarget: s.linkTarget,
+			replacement: s.replacement,
+			reason: s.reason,
+			confidence: s.confidence,
+		}));
+		} catch {
+			return [];
+		}
+	}
+
+	private isAlreadyLinked(targetFile: TFile, suggestion: { targetPhrase: string; replacement: string }): boolean {
+		// Simple check - could be improved
+		return suggestion.replacement.includes('[') && suggestion.replacement.includes(']');
+	}
+
+	private async showWikilinkReview(
+		targetFile: TFile,
+		suggestions: Array<{
+			targetPhrase: string;
+			linkTarget: string;
+			replacement: string;
+			reason: string;
+			confidence: 'high' | 'medium' | 'low';
+		}>
+	): Promise<void> {
+		// Convert to format expected by existing WikilinkSuggestionsModal
+		const formatted = suggestions.map(s => ({
+			targetPath: '', // Will be resolved from linkTarget
+			targetTitle: s.linkTarget,
+			sourcePhrase: s.targetPhrase,
+			confidence: s.confidence === 'high' ? 0.9 : s.confidence === 'medium' ? 0.7 : 0.5,
+			reason: s.reason,
+			replacement: s.replacement, // Custom replacement with potential rewrite
+		}));
+
+		// For now, use the existing modal with adapted suggestions
+		// TODO: Build a proper review UI with diff preview
+		const modal = new WikilinkSuggestionsModal(this.app, {
+			sourceText: await this.app.vault.cachedRead(targetFile),
+			file: targetFile,
+			onApply: (newText) => void this.applyWikilinks(targetFile, newText),
+		});
+		modal.open();
+		modal.setSuggestions(formatted.map(s => ({
+			targetPath: s.targetPath,
+			targetTitle: s.targetTitle,
+			sourcePhrase: s.sourcePhrase,
+			confidence: s.confidence,
+			reason: s.reason,
+		})));
 	}
 
 	private async applyWikilinks(file: TFile, newText: string): Promise<void> {
@@ -1067,11 +1267,16 @@ export class AideChatView extends ItemView {
 		// Update profile button
 		this.updateProfileButton();
 
-		// Update combined provider/model button
+		// Update provider button
+		this.providerButton.setText(label);
+		setTooltip(this.providerButton, `Provider: ${label}. Click to change.`);
+		this.providerButton.toggleClass('is-unconfigured', !configured);
+
+		// Update model button
 		const modelShort = summarize(model, 20);
-		this.providerModelButton.setText(`${label} · ${modelShort}`);
-		setTooltip(this.providerModelButton, `Provider: ${label}\nModel: ${model}. Click to change.`);
-		this.providerModelButton.toggleClass('is-unconfigured', !configured);
+		this.modelButton.setText(modelShort);
+		setTooltip(this.modelButton, `Model: ${model}. Click to change.`);
+		this.modelButton.toggleClass('is-unconfigured', !configured);
 
 		this.modeBadge.toggleClass('is-visible', conversation.mode === 'tutor');
 

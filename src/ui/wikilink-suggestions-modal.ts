@@ -167,7 +167,15 @@ export class WikilinkSuggestionsModal extends Modal {
 		for (const index of sortedIndices) {
 			const suggestion = this.suggestions[index];
 			if (suggestion) {
-				newText = applyWikilinkToText(newText, suggestion.sourcePhrase, suggestion.targetTitle);
+				if (suggestion.replacement) {
+					// Use custom replacement (AI-suggested rewrite)
+					const idx = newText.toLowerCase().indexOf(suggestion.sourcePhrase.toLowerCase());
+					if (idx !== -1 && !isPositionProtected(newText, idx)) {
+						newText = newText.slice(0, idx) + suggestion.replacement + newText.slice(idx + suggestion.sourcePhrase.length);
+					}
+				} else {
+					newText = applyWikilinkToText(newText, suggestion.sourcePhrase, suggestion.targetTitle);
+				}
 			}
 		}
 

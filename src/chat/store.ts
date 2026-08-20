@@ -49,12 +49,15 @@ function isConversation(value: unknown): value is Conversation {
 	);
 }
 
+type StoreListener = () => void;
+
 /** Local, in-memory conversation history with debounced persistence. */
 export class ConversationStore {
 	private conversations: Conversation[] = [];
 	private saveTimer: ReturnType<typeof setTimeout> | null = null;
 	private readonly limit: number;
 	private readonly saveDelayMs: number;
+	private listeners = new Set<StoreListener>();
 
 	constructor(
 		private readonly storage: ConversationStorage,
@@ -62,6 +65,16 @@ export class ConversationStore {
 	) {
 		this.limit = options.limit ?? DEFAULT_LIMIT;
 		this.saveDelayMs = options.saveDelayMs ?? DEFAULT_SAVE_DELAY;
+	}
+
+	/** Subscribe to store changes. Returns an unsubscribe function. */
+	subscribe(listener: StoreListener): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+
+	private emit(): void {
+		for (const listener of this.listeners) listener();
 	}
 
 	async load(): Promise<void> {
@@ -107,6 +120,7 @@ export class ConversationStore {
 		this.conversations.unshift(conversation);
 		this.trim();
 		this.scheduleSave();
+		this.emit();
 		return conversation;
 	}
 
@@ -115,11 +129,13 @@ export class ConversationStore {
 			(conversation) => conversation.id !== id,
 		);
 		this.scheduleSave();
+		this.emit();
 	}
 
 	clear(): void {
 		this.conversations = [];
 		this.scheduleSave();
+		this.emit();
 	}
 
 	/** Record that a conversation changed and schedule a write. */
@@ -130,6 +146,7 @@ export class ConversationStore {
 			this.trim();
 		}
 		this.scheduleSave();
+		this.emit();
 	}
 
 	scheduleSave(): void {

@@ -1,9 +1,10 @@
 import { Menu, Modal, type App, setIcon } from 'obsidian';
-import { conversationTitle, type Conversation } from '../chat/conversation';
+import { conversationTitle, getRootConversationTitle, type Conversation } from '../chat/conversation';
+import { ConversationStore } from '../chat/store';
 
 /** Options for the conversation picker modal. */
 export interface ConversationPickerOptions {
-	conversations: Conversation[];
+	store: ConversationStore;
 	onChoose: (conversation: Conversation) => void;
 	onDelete?: (id: string) => void;
 	onRename?: (id: string, newTitle: string) => void;
@@ -13,30 +14,32 @@ export interface ConversationPickerOptions {
 
 /** Modal for browsing and managing conversation history. */
 export class ConversationPickerModal extends Modal {
-	private readonly conversations: Conversation[];
+	private readonly store: ConversationStore;
 	private readonly onChoose: (conversation: Conversation) => void;
 	private readonly onDelete: ((id: string) => void) | undefined;
 	private readonly onRename: ((id: string, newTitle: string) => void) | undefined;
 	private readonly onBranch: ((id: string) => void) | undefined;
 	private readonly currentConversationId: string | undefined;
 	private filter = '';
-	private filteredConversations: Conversation[] = [];
+	private unsubscribe: (() => void) | null = null;
 
 	constructor(app: App, options: ConversationPickerOptions) {
 		super(app);
-		this.conversations = options.conversations;
+		this.store = options.store;
 		this.onChoose = options.onChoose;
 		this.onDelete = options.onDelete;
 		this.onRename = options.onRename;
 		this.onBranch = options.onBranch;
 		this.currentConversationId = options.currentConversationId;
-		this.filteredConversations = this.conversations;
 	}
 
 	override onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass('obsaide-conversation-picker-modal');
+
+		// Subscribe to store changes for live updates
+		this.unsubscribe = this.store.subscribe(() => this.renderList());
 
 		// Header with search and new conversation
 		const header = contentEl.createDiv({ cls: 'obsaide-conversation-picker-header' });
@@ -84,13 +87,13 @@ export class ConversationPickerModal extends Modal {
 	private renderList(): void {
 		this.listContainer.empty();
 
-		this.filteredConversations = this.conversations.filter((conv) => {
+		const conversations = this.store.list().filter((conv) => {
 			if (!this.filter) return true;
 			const title = conversationTitle(conv).toLowerCase();
 			return title.includes(this.filter);
 		});
 
-		if (this.filteredConversations.length === 0) {
+		if (conversations.length === 0) {
 			this.listContainer.createDiv({
 				cls: 'obsaide-conversation-empty',
 				text: this.filter ? 'No conversations match your filter' : 'No conversations yet.',
@@ -98,7 +101,7 @@ export class ConversationPickerModal extends Modal {
 			return;
 		}
 
-		for (const conversation of this.filteredConversations) {
+		for (const conversation of conversations) {
 			this.renderConversationItem(conversation);
 		}
 	}
@@ -114,18 +117,12 @@ export class ConversationPickerModal extends Modal {
 
 		const titleRow = main.createDiv({ cls: 'obsaide-conversation-title-row' });
 
-		// Conversation title
-		const displayTitle = conversation.branchName || conversationTitle(conversation);
+		// Conversation title - use root title (without branch suffix)
+		const rootTitle = getRootConversationTitle(conversation);
 		titleRow.createDiv({
 			cls: 'obsaide-conversation-title',
-			text: displayTitle,
+			text: rootTitle,
 		});
-
-		// Show branch indicator for branches
-		if (conversation.parentConversationId) {
-			const branchBadge = titleRow.createSpan({ cls: 'obsaide-branch-badge' });
-			branchBadge.setText('↳ branch');
-		}
 
 		// Show current conversation indicator (subtle)
 		if (isCurrent) {
@@ -133,11 +130,15 @@ export class ConversationPickerModal extends Modal {
 			currentBadge.setText('Current');
 		}
 
-		// Metadata
+		// Metadata - include branch indicator here
 		const turns = conversation.messages.filter((m) => m.role === 'user').length;
+		let metaText = `${turns} ${turns === 1 ? 'message' : 'messages'} · ${formatWhen(conversation.updatedAt)}`;
+		if (conversation.parentConversationId) {
+			metaText = `↳ Branch · ${metaText}`;
+		}
 		main.createDiv({
 			cls: 'obsaide-conversation-meta',
-			text: `${turns} ${turns === 1 ? 'message' : 'messages'} · ${formatWhen(conversation.updatedAt)}`,
+			text: metaText,
 		});
 
 		// Click to open
@@ -236,6 +237,8 @@ export class ConversationPickerModal extends Modal {
 	}
 
 	override onClose(): void {
+		this.unsubscribe?.();
+		this.unsubscribe = null;
 		this.contentEl.empty();
 	}
 }
