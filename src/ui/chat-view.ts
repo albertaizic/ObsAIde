@@ -22,6 +22,7 @@ import { AIDE_ACTIONS } from '../actions/registry';
 import { describeCustomActionAvailability, runAction, runCustomAction } from '../actions/runner';
 import type { ChatController, SendRequest } from '../chat/controller';
 import { isEmptyConversation, conversationTitle, type Conversation, type ConversationMessage } from '../chat/conversation';
+import type { QuizQuestion } from './quiz-note-modal';
 import { buildConversationExportContent, sanitizeExportName, type ConversationExportMode as ExportMode } from '../chat/export';
 import { buildContextBlock } from '../context/resolve';
 import {
@@ -53,7 +54,7 @@ import { NotePickerModal } from './note-picker';
 import { PromptModal } from './prompt-modal';
 import { QuizNoteModal, type QuizNoteOptions } from './quiz-note-modal';
 import { WikilinkSuggestionsModal } from './wikilink-suggestions-modal';
-import { WikilinkSetupModal } from './wikilink-setup-modal';
+import { WikilinkSetupModal, WikilinkSetupOptions, WikilinkFolderSource } from './wikilink-setup-modal';
 import { BottomScroller } from './scroller';
 import { isPositionProtected, applyWikilink } from '../context/wikilink-suggestions';
 import type ObsAidePlugin from '../main';
@@ -621,10 +622,20 @@ export class AideChatView extends ItemView {
 			// send until the user picks one.
 			const hasFolder = this.attachments.some((a) => a.kind === 'folder');
 			if (!hasFolder) {
-				new FolderPickerModal(this.app, (folder) => {
-					this.addAttachment(captureFolder(this.app, folder));
-					this.composer.setAttachments(this.attachments);
-					this.composer.setScope(scope, folder.name || folder.path);
+				new FolderPickerModal(this.app, (folderSource) => {
+					if (folderSource.isRoot) {
+						const rootFolder = this.app.vault.getRoot();
+						this.addAttachment(captureFolder(this.app, rootFolder));
+						this.composer.setAttachments(this.attachments);
+						this.composer.setScope(scope, '/');
+					} else {
+						const folder = this.app.vault.getAbstractFileByPath(folderSource.path);
+						if (folder instanceof TFolder) {
+							this.addAttachment(captureFolder(this.app, folder));
+							this.composer.setAttachments(this.attachments);
+							this.composer.setScope(scope, folderSource.name || folderSource.path);
+						}
+					}
 				}).open();
 				return;
 			}
@@ -776,12 +787,12 @@ export class AideChatView extends ItemView {
 	}
 
 	private openQuizNoteSetup(): void {
-		const modal = new QuizNoteModal(this.app, this.attachments, async (options) => {
-			const success = await this.generateQuizNote(options);
+		const modal = new QuizNoteModal(this.app, this.attachments, async (options, signal) => {
+			const success = await this.generateQuizNote(options, signal);
 			if (success) {
 				modal.close();
-			} else {
-				// Re-enable the modal controls on failure
+			} else if (!signal?.aborted) {
+				// Re-enable the modal controls on failure (but not on abort)
 				modal.setGenerationFailed();
 			}
 		});
@@ -797,24 +808,20 @@ export class AideChatView extends ItemView {
 		}
 
 		// Open the setup modal to select targets and sources
-		new WikilinkSetupModal(this.app, (options) => {
-			void this.runWikilinkAnalysis(options);
+		new WikilinkSetupModal(this.app, (options, signal) => {
+			void this.runWikilinkAnalysis(options, signal);
 		}).open();
 	}
 
-	private async runWikilinkAnalysis(options: {
-		targets: Array<{ file: TFile; selected: boolean }>;
-		sources: Array<{ file: TFile; selected: boolean }>;
-		sourceFolders: Array<{ folder: TFolder; selected: boolean; noteCount: number }>;
-	}): Promise<void> {
-		const selectedTargets = options.targets.filter(t => t.selected);
+	private async runWikilinkAnalysis(options: WikilinkSetupOptions, signal: AbortSignal): Promise<void> {
+		const selectedTargets = options.targets;
 
 		if (selectedTargets.length === 0) {
 			new Notice('Select at least one target note.');
 			return;
 		}
 
-		const hasSources = options.sources.some(s => s.selected) || options.sourceFolders.some(f => f.selected);
+		const hasSources = options.sources.length > 0 || options.sourceFolders.length > 0;
 		if (!hasSources) {
 			new Notice('Select at least one source note or folder.');
 			return;
@@ -822,26 +829,43 @@ export class AideChatView extends ItemView {
 
 		// Collect all source files
 		const sourceFiles: TFile[] = [];
-		for (const source of options.sources.filter(s => s.selected)) {
+		for (const source of options.sources) {
 			sourceFiles.push(source.file);
 		}
-		for (const folder of options.sourceFolders.filter(f => f.selected)) {
-			const notes = this.app.vault.getMarkdownFiles().filter(f =>
-				f.path.startsWith(folder.folder.path + '/') || f.path === folder.folder.path
-			);
-			sourceFiles.push(...notes);
+		for (const folder of options.sourceFolders) {
+			const isRoot = (folder as WikilinkFolderSource & { isRoot?: boolean }).isRoot === true;
+			if (isRoot) {
+				// Vault root - add all markdown files
+				const notes = this.app.vault.getMarkdownFiles();
+				sourceFiles.push(...notes);
+			} else {
+				// folder.folder is guaranteed non-null here because isRoot is false
+				const folderRef = folder.folder;
+				if (folderRef) {
+					const notes = this.app.vault.getMarkdownFiles().filter(f =>
+						f.path.startsWith(folderRef.path + '/') || f.path === folderRef.path
+					);
+					sourceFiles.push(...notes);
+				}
+			}
 		}
 
 		// Remove duplicates
 		const uniqueSourceFiles = Array.from(new Map(sourceFiles.map(f => [f.path, f])).values());
 
+		if (uniqueSourceFiles.length === 0) {
+			new Notice('No readable source content found.');
+			return;
+		}
+
 		// For each target, run analysis
 		for (const target of selectedTargets) {
-			await this.analyzeTarget(target.file, uniqueSourceFiles);
+			if (signal.aborted) return;
+			await this.analyzeTarget(target.file, uniqueSourceFiles, signal);
 		}
 	}
 
-	private async analyzeTarget(targetFile: TFile, sourceFiles: TFile[]): Promise<void> {
+	private async analyzeTarget(targetFile: TFile, sourceFiles: TFile[], signal: AbortSignal): Promise<void> {
 		// Read target content
 		const targetContent = await this.app.vault.cachedRead(targetFile);
 		if (!targetContent.trim()) {
@@ -888,6 +912,7 @@ export class AideChatView extends ItemView {
 				model: this.controller.model,
 				system: systemPrompt,
 				messages: [{ role: 'user', content: userPrompt }],
+				signal,
 			});
 
 			// Parse structured suggestions from AI response
@@ -1159,9 +1184,17 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 				.setTitle('Choose a folder…')
 				.setIcon('folder')
 				.onClick(() => {
-					new FolderPickerModal(this.app, (folder) =>
-						this.addAttachment(captureFolder(this.app, folder)),
-					).open();
+					new FolderPickerModal(this.app, (folderSource) => {
+						if (folderSource.isRoot) {
+							const rootFolder = this.app.vault.getRoot();
+							this.addAttachment(captureFolder(this.app, rootFolder));
+						} else {
+							const folder = this.app.vault.getAbstractFileByPath(folderSource.path);
+							if (folder instanceof TFolder) {
+								this.addAttachment(captureFolder(this.app, folder));
+							}
+						}
+					}).open();
 				}),
 		);
 				if (this.attachments.length > 0) {
@@ -1275,6 +1308,10 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 		// Update profile button
 		this.updateProfileButton();
 
+		// Update length button
+		const settings = this.controller.getSettings();
+		this.composer.setLength(settings.responseLength ?? 'normal');
+
 		// Update provider button
 		this.providerButton.setText(label);
 		setTooltip(this.providerButton, `Provider: ${label}. Click to change.`);
@@ -1382,7 +1419,7 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 	 * Generate a quiz note from the current context and create it as a Markdown file.
 	 * Returns true on success, false on failure.
 	 */
-	private async generateQuizNote(options: QuizNoteOptions): Promise<boolean> {
+	private async generateQuizNote(options: QuizNoteOptions, signal?: AbortSignal): Promise<boolean> {
 		const settings = this.controller.getSettings();
 		const providerId = settings.defaultProvider;
 		const model = settings.providers[providerId].model;
@@ -1411,14 +1448,23 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 			profileInstructions: activeProfile.instructions,
 		});
 
-		// Build the quiz generation prompt with strict format requirements
+		// Build the quiz generation prompt requesting structured JSON output
 		const difficultyInstruction = this.getDifficultyInstruction(options.difficulty);
 		const typeInstruction = this.getTypeInstruction(options.type);
 		const answerKeyInstruction = options.includeAnswerKey
-			? 'For EACH question, include a collapsible answer callout directly after the question using this EXACT format:\n> [!answer]- ✅ Answer\n> Answer text here.\n\nThe "-" after "[!answer]" is REQUIRED to make answers start collapsed.'
-			: 'Do NOT include any answers. Questions only.';
+			? 'For EACH question, include an "answer" field with the answer text and an "explanation" field with the reasoning.'
+			: 'Do NOT include answers. Set "answer" and "explanation" to null.';
 
-		const userPrompt = `${contextBlock}\n\nGenerate a study quiz based ONLY on the provided context.\n\nSTRICT FORMAT REQUIREMENTS:\n- Output EXACTLY ${options.questionCount} questions\n- Each question MUST start with "## Problem N" where N is 1, 2, 3...\n- Question text MUST be bold: "**Question text?**"\n- ${typeInstruction}\n- ${difficultyInstruction}\n- ${answerKeyInstruction}\n- NO introductory text, NO concluding text, NO "Here is your quiz", NO code fences around the whole output\n- NO separate "Answer Key" section at the end when answers are enabled\n- Ground every question in the provided context — do not invent material\n- If context is insufficient for a question, skip that topic but maintain numbering\n\nOutput ONLY the quiz as Markdown.`;
+		const typeMap: Record<string, string> = {
+			'short-answer': 'short-answer',
+			'multiple-choice': 'multiple-choice',
+			'true-false': 'true-false',
+			'explain': 'explain',
+			'application': 'application',
+			'mixed': 'mixed',
+		};
+
+		const userPrompt = `${contextBlock}\n\nGenerate a study quiz based ONLY on the provided context.\n\nREQUIREMENTS:\n- Output EXACTLY ${options.questionCount} questions\n- Question types: ${typeInstruction}\n- ${difficultyInstruction}\n- ${answerKeyInstruction}\n- Ground every question in the provided context — do not invent material\n- If context is insufficient for a question, skip that topic but maintain numbering\n\nOUTPUT FORMAT (strict JSON only, no code fences, no extra text):\n{\n  "questions": [\n    {\n      "type": "short-answer|multiple-choice|true-false|explain|application",\n      "question": "Question text here?",\n      "options": ["A. ...", "B. ...", "C. ...", "D. ..."], // only for multiple-choice\n      "correctIndex": 0, // only for multiple-choice (0-3)\n      "answer": "Answer text", // when includeAnswerKey is true\n      "explanation": "Explanation text" // when includeAnswerKey is true\n    }\n  ]\n}\n\nFor "mixed" type, distribute questions across types as evenly as possible (e.g., 5 questions = 1 of each type, 10 = 2 of each, etc.).`;
 
 		try {
 			const result = await this.plugin.providers.complete({
@@ -1426,25 +1472,35 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 				model,
 				system: systemPrompt,
 				messages: [{ role: 'user', content: userPrompt }],
+				signal,
 			});
 
-			const quizContent = result.text.trim();
-			if (!quizContent) {
+			const rawText = result.text.trim();
+			if (!rawText) {
 				new Notice('Quiz generation returned empty content.');
 				return false;
 			}
 
-			// Validate quiz format before creating note
-			const validation = this.validateQuizFormat(quizContent, options.questionCount, options.includeAnswerKey);
-			if (!validation.valid) {
-				new Notice(`Quiz format invalid: ${validation.error}`);
+			// Parse and validate structured quiz data
+			const quizData = this.parseQuizJson(rawText);
+			if (!quizData) {
+				new Notice('Quiz generation failed: Invalid JSON structure returned.');
 				return false;
 			}
+
+			const validation = this.validateQuizData(quizData, options.questionCount, options.type, options.includeAnswerKey);
+			if (!validation.valid) {
+				new Notice(`Quiz validation failed: ${validation.error}`);
+				return false;
+			}
+
+			// Render Markdown from structured data
+			const markdownContent = this.renderQuizMarkdown(quizData, options.includeAnswerKey);
 
 			// Add frontmatter with title
 			const frontmatter = `---\ncreated: ${new Date().toISOString().split('T')[0]}\nsource: ObsAIde\ntype: quiz\n---\n\n`;
 			const titleLine = `# ${options.name}\n\n`;
-			const fullContent = frontmatter + titleLine + quizContent;
+			const fullContent = frontmatter + titleLine + markdownContent;
 
 			// Create the note
 			const folderPath = options.folderPath.trim();
@@ -1467,6 +1523,10 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 			if (leaf) await leaf.openFile(file);
 			return true;
 		} catch (error) {
+			if (signal?.aborted || (error as Error).name === 'AbortError') {
+				new Notice('Quiz generation cancelled.');
+				return false;
+			}
 			new Notice('Quiz generation failed: ' + String(error));
 			return false;
 		}
@@ -1510,6 +1570,149 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 		}
 
 		return { valid: true };
+	}
+
+	/**
+	 * Parse JSON from AI response, handling code fences and extra text.
+	 */
+	private parseQuizJson(text: string): { questions: QuizQuestion[] } | null {
+		try {
+			let jsonText = text.trim();
+			if (jsonText.startsWith('```')) {
+				const fenceEnd = jsonText.indexOf('\n');
+				if (fenceEnd !== -1) {
+					jsonText = jsonText.slice(fenceEnd + 1);
+					const endFence = jsonText.lastIndexOf('```');
+					if (endFence !== -1) {
+						jsonText = jsonText.slice(0, endFence);
+					}
+				}
+			}
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- JSON.parse returns any
+			const parsed: { questions?: unknown } = JSON.parse(jsonText);
+			if (!parsed.questions || !Array.isArray(parsed.questions)) {
+				return null;
+			}
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- validated above
+			return { questions: parsed.questions as QuizQuestion[] };
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Validate structured quiz data.
+	 */
+	private validateQuizData(
+		data: { questions: unknown[] },
+		expectedCount: number,
+		type: QuizNoteOptions['type'],
+		includeAnswers: boolean
+	): { valid: boolean; error?: string } {
+		const questions = data.questions;
+		if (!Array.isArray(questions)) {
+			return { valid: false, error: 'Missing or invalid questions array' };
+		}
+		if (questions.length !== expectedCount) {
+			return { valid: false, error: `Expected ${expectedCount} questions, got ${questions.length}` };
+		}
+
+		// For mixed type, check distribution
+		if (type === 'mixed') {
+			const typeCounts = new Map<string, number>();
+			for (let i = 0; i < questions.length; i++) {
+				const q = questions[i];
+				if (q && typeof q === 'object' && q !== null && 'type' in q && typeof q.type === 'string') {
+					const typeValue = (q as { type: string }).type;
+					if (typeValue) {
+						typeCounts.set(typeValue, (typeCounts.get(typeValue) || 0) + 1);
+					}
+				}
+			}
+			const typesPresent = Array.from(typeCounts.keys()).filter(t => (typeCounts.get(t) || 0) > 0);
+			if (typesPresent.length < Math.min(3, expectedCount)) {
+				return { valid: false, error: 'Mixed type should include variety of question types' };
+			}
+		}
+
+		for (let i = 0; i < questions.length; i++) {
+			const q = questions[i];
+			if (!q || typeof q !== 'object' || q === null) {
+				return { valid: false, error: `Question ${i + 1} is not an object` };
+			}
+
+			// Use type assertion after validation
+			const question = q as Record<string, unknown>;
+
+			// Check required fields
+			if (typeof question.question !== 'string' || !question.question.trim()) {
+				return { valid: false, error: `Question ${i + 1} missing question text` };
+			}
+
+			if (typeof question.type !== 'string' || !['short-answer', 'multiple-choice', 'true-false', 'explain', 'application'].includes(question.type)) {
+				return { valid: false, error: `Question ${i + 1} has invalid type` };
+			}
+
+			// Type-specific validation
+			if (question.type === 'multiple-choice') {
+				if (!Array.isArray(question.options) || question.options.length !== 4) {
+					return { valid: false, error: `Question ${i + 1} (multiple-choice) must have exactly 4 options` };
+				}
+				if (typeof question.correctIndex !== 'number' || question.correctIndex < 0 || question.correctIndex > 3) {
+					return { valid: false, error: `Question ${i + 1} (multiple-choice) must have correctIndex 0-3` };
+				}
+			}
+
+			if (includeAnswers) {
+				if (typeof question.answer !== 'string' || !question.answer.trim()) {
+					return { valid: false, error: `Question ${i + 1} missing answer` };
+				}
+				if (typeof question.explanation !== 'string' || !question.explanation.trim()) {
+					return { valid: false, error: `Question ${i + 1} missing explanation` };
+				}
+			}
+		}
+
+		return { valid: true };
+	}
+
+	/**
+	 * Render Markdown from structured quiz data.
+	 */
+	private renderQuizMarkdown(data: { questions: QuizQuestion[] }, includeAnswers: boolean): string {
+		let markdown = '';
+		for (let i = 0; i < data.questions.length; i++) {
+			const q = data.questions[i];
+			if (!q) continue;
+
+			markdown += `## Problem ${i + 1}\n`;
+			markdown += `**${q.question}**\n\n`;
+
+			if (q.type === 'multiple-choice' && Array.isArray(q.options)) {
+				const letters = ['A', 'B', 'C', 'D'];
+				for (let j = 0; j < q.options.length; j++) {
+					markdown += `- ${letters[j]}. ${q.options[j]}\n`;
+				}
+				markdown += '\n';
+			}
+
+			if (includeAnswers) {
+				markdown += `> [!answer]- ✅ Answer\n`;
+				if (q.type === 'multiple-choice' && Array.isArray(q.options) && typeof q.correctIndex === 'number') {
+					const letters = ['A', 'B', 'C', 'D'];
+					markdown += `> **${letters[q.correctIndex]}. ${q.options[q.correctIndex]}**\n`;
+				} else {
+					markdown += `> ${q.answer}\n`;
+				}
+				if (q.explanation) {
+					markdown += `> ${q.explanation}\n`;
+				}
+				markdown += '\n';
+			}
+
+			markdown += '\n';
+		}
+		return markdown;
 	}
 
 	private getDifficultyInstruction(difficulty: QuizNoteOptions['difficulty']): string {

@@ -1,4 +1,4 @@
-import { Modal, Platform, setIcon, setTooltip, type App } from 'obsidian';
+import { Modal, Platform, setIcon, setTooltip, type App, type TFolder } from 'obsidian';
 import { ASSISTANT_NAME } from '../constants';
 import { captureFolder, captureNote, isDuplicateAttachment } from '../context/collect';
 import type { Attachment } from '../context/types';
@@ -63,9 +63,14 @@ export class AskAideModal extends Modal {
 		setIcon(addFolder.createSpan({ cls: 'obsaide-chip-icon' }), 'folder');
 		addFolder.createSpan({ cls: 'obsaide-chip-label', text: 'Add folder' });
 		addFolder.addEventListener('click', () => {
-			new FolderPickerModal(this.app, (folder) =>
-				this.addAttachment(captureFolder(this.app, folder, 'supporting')),
-			).open();
+			new FolderPickerModal(this.app, (folderSource) => {
+				if (folderSource.isRoot) {
+					const rootFolder = this.app.vault.getRoot();
+					this.addAttachment(captureFolder(this.app, rootFolder, 'supporting'));
+				} else {
+					this.addAttachment(captureFolder(this.app, folderSource.path as unknown as TFolder, 'supporting'));
+				}
+			}).open();
 		});
 
 		this.previewEl = contentEl.createDiv({ cls: 'obsaide-ask-preview' });

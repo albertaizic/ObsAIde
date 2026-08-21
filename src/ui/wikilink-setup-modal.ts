@@ -1,21 +1,19 @@
-import { Modal, Setting, Notice, type App, type TFile, type TFolder, setIcon } from 'obsidian';
-import { FolderPickerModal } from './folder-picker';
+import { Modal, Notice, type App, type TFile, type TFolder, setIcon } from 'obsidian';
+import { FolderPickerModal, FolderSource } from './folder-picker';
 import { NotePickerModal } from './note-picker';
 
 export interface WikilinkTarget {
 	file: TFile;
-	selected: boolean;
 }
 
 export interface WikilinkSource {
 	file: TFile;
-	selected: boolean;
 }
 
 export interface WikilinkFolderSource {
-	folder: TFolder;
-	selected: boolean;
+	folder: TFolder | null;
 	noteCount: number;
+	isRoot?: boolean;
 }
 
 export interface WikilinkSetupOptions {
@@ -24,15 +22,25 @@ export interface WikilinkSetupOptions {
 	sourceFolders: WikilinkFolderSource[];
 }
 
+/** Analysis state for the wikilink modal. */
+type AnalysisState = 'idle' | 'analyzing' | 'cancelled';
+
 /** Modal for configuring wikilink analysis: select target notes and source notes/folders. */
 export class WikilinkSetupModal extends Modal {
-	private readonly onAnalyze: (options: WikilinkSetupOptions) => void;
+	private readonly onAnalyze: (options: WikilinkSetupOptions, signal: AbortSignal) => void;
 	private targets: WikilinkTarget[] = [];
 	private sources: WikilinkSource[] = [];
 	private sourceFolders: WikilinkFolderSource[] = [];
 	private analyzeButton!: HTMLButtonElement;
+	private cancelButton!: HTMLButtonElement;
+	private state: AnalysisState = 'idle';
+	private abortController: AbortController | null = null;
+	private headerTitleEl!: HTMLElement;
+	private targetsList!: HTMLElement;
+	private sourcesList!: HTMLElement;
+	private stateDisplayEl!: HTMLElement;
 
-	constructor(app: App, onAnalyze: (options: WikilinkSetupOptions) => void) {
+	constructor(app: App, onAnalyze: (options: WikilinkSetupOptions, signal: AbortSignal) => void) {
 		super(app);
 		this.onAnalyze = onAnalyze;
 	}
@@ -44,62 +52,60 @@ export class WikilinkSetupModal extends Modal {
 
 		// Header
 		const header = contentEl.createDiv({ cls: 'obsaide-wikilink-setup-header' });
-		header.createEl('h3', { text: 'Suggest wikilinks' });
+		this.headerTitleEl = header.createEl('h3', { text: 'Suggest wikilinks' });
 
 		// Targets section
 		const targetsSection = contentEl.createDiv({ cls: 'obsaide-wikilink-setup-section' });
 		const targetsHeader = targetsSection.createDiv({ cls: 'obsaide-wikilink-setup-section-header' });
-		targetsHeader.createEl('h4', { text: 'Targets' });
-		targetsHeader.createEl('span', { cls: 'obsaide-wikilink-setup-section-desc', text: 'Notes that will receive new wikilinks' });
+		targetsHeader.createEl('h4', { text: 'Target notes' });
+		targetsHeader.createSpan({ cls: 'obsaide-wikilink-setup-section-desc', text: 'Notes that will receive new wikilinks' });
 
 		this.targetsList = targetsSection.createDiv({ cls: 'obsaide-wikilink-setup-list' });
 		this.renderTargets();
 
 		const addTargetBtn = targetsSection.createEl('button', {
 			cls: 'obsaide-button obsaide-button-small',
-			text: '+ Add target note',
+			text: '+ add target note',
 		});
 		addTargetBtn.addEventListener('click', () => this.addTargetNote());
 
 		// Sources section
 		const sourcesSection = contentEl.createDiv({ cls: 'obsaide-wikilink-setup-section' });
 		const sourcesHeader = sourcesSection.createDiv({ cls: 'obsaide-wikilink-setup-section-header' });
-		sourcesHeader.createEl('h4', { text: 'Sources' });
-		sourcesHeader.createEl('span', { cls: 'obsaide-wikilink-setup-section-desc', text: 'Notes/folders to analyze for connections (will not be modified)' });
+		sourcesHeader.createEl('h4', { text: 'Source material' });
+		sourcesHeader.createSpan({ cls: 'obsaide-wikilink-setup-section-desc', text: 'Notes and folders to analyze for connections (will not be modified)' });
 
 		this.sourcesList = sourcesSection.createDiv({ cls: 'obsaide-wikilink-setup-list' });
 		this.renderSources();
 
-		const sourceButtons = sourcesSection.createDiv({ cls: 'obsaide-wikilink-setup-buttons' });
-		const addSourceNoteBtn = sourceButtons.createEl('button', {
+		const addSourceNoteBtn = sourcesSection.createEl('button', {
 			cls: 'obsaide-button obsaide-button-small',
-			text: '+ Add source note',
+			text: '+ add source note',
 		});
 		addSourceNoteBtn.addEventListener('click', () => this.addSourceNote());
 
-		const addSourceFolderBtn = sourceButtons.createEl('button', {
+		const addSourceFolderBtn = sourcesSection.createEl('button', {
 			cls: 'obsaide-button obsaide-button-small',
-			text: '+ Add source folder',
+			text: '+ add source folder',
 		});
 		addSourceFolderBtn.addEventListener('click', () => this.addSourceFolder());
 
-		// Analyze button
+		// Action buttons
 		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
+		this.cancelButton = buttons.createEl('button', {
+			cls: 'obsaide-button',
+			text: 'Cancel',
+		});
+		this.cancelButton.addEventListener('click', () => this.handleCancel());
+
 		this.analyzeButton = buttons.createEl('button', {
 			cls: 'obsaide-button is-cta',
 			text: 'Analyze connections',
 		});
 		this.analyzeButton.addEventListener('click', () => this.handleAnalyze());
-		this.updateAnalyzeButton();
 
-		buttons.createEl('button', {
-			cls: 'obsaide-button',
-			text: 'Cancel',
-		}).addEventListener('click', () => this.close());
+		this.updateUIForState();
 	}
-
-	private targetsList!: HTMLElement;
-	private sourcesList!: HTMLElement;
 
 	private renderTargets(): void {
 		this.targetsList.empty();
@@ -116,16 +122,6 @@ export class WikilinkSetupModal extends Modal {
 			const target = this.targets[i]!;
 			const item = this.targetsList.createDiv({ cls: 'obsaide-wikilink-setup-item' });
 
-			const checkbox = item.createEl('input', {
-				type: 'checkbox',
-				cls: 'obsaide-wikilink-setup-checkbox',
-			});
-			checkbox.checked = target.selected;
-			checkbox.addEventListener('change', () => {
-				target.selected = checkbox.checked;
-				this.updateAnalyzeButton();
-			});
-
 			const info = item.createDiv({ cls: 'obsaide-wikilink-setup-info' });
 			info.createDiv({ cls: 'obsaide-wikilink-setup-title', text: target.file.basename });
 			info.createDiv({ cls: 'obsaide-wikilink-setup-path', text: target.file.path });
@@ -134,7 +130,7 @@ export class WikilinkSetupModal extends Modal {
 				cls: 'obsaide-wikilink-setup-remove',
 				attr: { 'aria-label': `Remove ${target.file.basename}` },
 			});
-			setIcon(removeBtn, 'trash-2');
+			setIcon(removeBtn, 'x');
 			removeBtn.addEventListener('click', () => {
 				this.targets.splice(i, 1);
 				this.renderTargets();
@@ -160,17 +156,10 @@ export class WikilinkSetupModal extends Modal {
 			const source = this.sources[i]!;
 			const item = this.sourcesList.createDiv({ cls: 'obsaide-wikilink-setup-item' });
 
-			const checkbox = item.createEl('input', {
-				type: 'checkbox',
-				cls: 'obsaide-wikilink-setup-checkbox',
-			});
-			checkbox.checked = source.selected;
-			checkbox.addEventListener('change', () => {
-				source.selected = checkbox.checked;
-			});
-
 			const info = item.createDiv({ cls: 'obsaide-wikilink-setup-info' });
 			const titleRow = info.createDiv({ cls: 'obsaide-wikilink-setup-title-row' });
+			const icon = titleRow.createSpan({ cls: 'obsaide-wikilink-setup-icon' });
+			setIcon(icon, 'file-text');
 			titleRow.createDiv({ cls: 'obsaide-wikilink-setup-title', text: source.file.basename });
 			titleRow.createSpan({ cls: 'obsaide-wikilink-setup-badge', text: 'Note' });
 			info.createDiv({ cls: 'obsaide-wikilink-setup-path', text: source.file.path });
@@ -179,7 +168,7 @@ export class WikilinkSetupModal extends Modal {
 				cls: 'obsaide-wikilink-setup-remove',
 				attr: { 'aria-label': `Remove ${source.file.basename}` },
 			});
-			setIcon(removeBtn, 'trash-2');
+			setIcon(removeBtn, 'x');
 			removeBtn.addEventListener('click', () => {
 				this.sources.splice(i, 1);
 				this.renderSources();
@@ -187,31 +176,34 @@ export class WikilinkSetupModal extends Modal {
 			});
 		}
 
-		// Source folders
+		// Source folders (including vault root)
 		for (let i = 0; i < this.sourceFolders.length; i++) {
 			const folder = this.sourceFolders[i]!;
+			const isRoot = folder.isRoot === true;
 			const item = this.sourcesList.createDiv({ cls: 'obsaide-wikilink-setup-item' });
-
-			const checkbox = item.createEl('input', {
-				type: 'checkbox',
-				cls: 'obsaide-wikilink-setup-checkbox',
-			});
-			checkbox.checked = folder.selected;
-			checkbox.addEventListener('change', () => {
-				folder.selected = checkbox.checked;
-			});
 
 			const info = item.createDiv({ cls: 'obsaide-wikilink-setup-info' });
 			const titleRow = info.createDiv({ cls: 'obsaide-wikilink-setup-title-row' });
-			titleRow.createDiv({ cls: 'obsaide-wikilink-setup-title', text: folder.folder.name });
-			titleRow.createSpan({ cls: 'obsaide-wikilink-setup-badge', text: `Folder (${folder.noteCount} notes)` });
-			info.createDiv({ cls: 'obsaide-wikilink-setup-path', text: folder.folder.path });
+			const icon = titleRow.createSpan({ cls: 'obsaide-wikilink-setup-icon' });
+			setIcon(icon, isRoot ? 'box' : 'folder');
+			let folderName: string;
+			let folderPath: string;
+			if (isRoot) {
+				folderName = 'Vault root';
+				folderPath = '/';
+			} else {
+				folderName = folder.folder?.name ?? 'Unknown folder';
+				folderPath = folder.folder?.path ?? 'Unknown path';
+			}
+			titleRow.createDiv({ cls: 'obsaide-wikilink-setup-title', text: folderName });
+			titleRow.createSpan({ cls: 'obsaide-wikilink-setup-badge', text: isRoot ? `Vault (${folder.noteCount} notes)` : `Folder (${folder.noteCount} notes)` });
+			info.createDiv({ cls: 'obsaide-wikilink-setup-path', text: folderPath });
 
 			const removeBtn = item.createEl('button', {
 				cls: 'obsaide-wikilink-setup-remove',
-				attr: { 'aria-label': `Remove ${folder.folder.name}` },
+				attr: { 'aria-label': `Remove ${folderName}` },
 			});
-			setIcon(removeBtn, 'trash-2');
+			setIcon(removeBtn, 'x');
 			removeBtn.addEventListener('click', () => {
 				this.sourceFolders.splice(i, 1);
 				this.renderSources();
@@ -226,7 +218,7 @@ export class WikilinkSetupModal extends Modal {
 				new Notice('This note is already a target.');
 				return;
 			}
-			this.targets.push({ file, selected: true });
+			this.targets.push({ file });
 			this.renderTargets();
 			this.updateAnalyzeButton();
 		}).open();
@@ -243,45 +235,117 @@ export class WikilinkSetupModal extends Modal {
 				new Notice('This note is already a source.');
 				return;
 			}
-			this.sources.push({ file, selected: true });
+			this.sources.push({ file });
 			this.renderSources();
 		}).open();
 	}
 
 	private addSourceFolder(): void {
-		new FolderPickerModal(this.app, (folder) => {
-			// Count notes in folder
-			const notes = this.app.vault.getMarkdownFiles().filter(f => f.path.startsWith(folder.path + '/') || f.path === folder.path);
-			if (notes.length === 0) {
-				new Notice('This folder contains no Markdown notes.');
-				return;
+		new FolderPickerModal(this.app, (folderSource: FolderSource) => {
+			if (folderSource.isRoot) {
+				if (this.sourceFolders.some(f => (f as WikilinkFolderSource & { isRoot?: boolean }).isRoot)) {
+					new Notice('Vault root is already a source.');
+					return;
+				}
+				const noteCount = this.app.vault.getMarkdownFiles().length;
+				const rootEntry: WikilinkFolderSource = { folder: null, noteCount, isRoot: true };
+				this.sourceFolders.push(rootEntry);
+			} else {
+				if (this.sourceFolders.some(f => f.folder?.path === folderSource.path)) {
+					new Notice('This folder is already a source.');
+					return;
+				}
+				this.sourceFolders.push({ folder: folderSource.path as unknown as TFolder, noteCount: folderSource.noteCount });
 			}
-			if (this.sourceFolders.some(f => f.folder.path === folder.path)) {
-				new Notice('This folder is already a source.');
-				return;
-			}
-			this.sourceFolders.push({ folder, selected: true, noteCount: notes.length });
 			this.renderSources();
 			this.updateAnalyzeButton();
 		}).open();
 	}
 
 	private updateAnalyzeButton(): void {
-		const hasTarget = this.targets.some(t => t.selected);
-		const hasSource = this.sources.some(s => s.selected) || this.sourceFolders.some(f => f.selected);
+		const hasTarget = this.targets.length > 0;
+		const hasSource = this.sources.length > 0 || this.sourceFolders.length > 0;
 		this.analyzeButton.disabled = !(hasTarget && hasSource);
 	}
 
 	private handleAnalyze(): void {
-		this.close();
+		this.setState('analyzing');
+		this.abortController = new AbortController();
 		this.onAnalyze({
 			targets: this.targets,
 			sources: this.sources,
 			sourceFolders: this.sourceFolders,
+		}, this.abortController.signal);
+	}
+
+	private handleCancel(): void {
+		if (this.state === 'analyzing') {
+			this.setState('cancelled');
+			this.abortController?.abort();
+			window.setTimeout(() => {
+				this.setState('idle');
+			}, 100);
+		} else {
+			this.close();
+		}
+	}
+
+	private setState(state: AnalysisState): void {
+		this.state = state;
+		this.updateUIForState();
+	}
+
+	private updateUIForState(): void {
+		const isAnalyzing = this.state === 'analyzing';
+
+		// Update title
+		if (isAnalyzing) {
+			this.headerTitleEl.setText('Analyzing connections…');
+		} else if (this.state === 'cancelled') {
+			this.headerTitleEl.setText('Analysis cancelled');
+		} else {
+			this.headerTitleEl.setText('Suggest wikilinks');
+		}
+
+		// Show/hide state display
+		if (!this.stateDisplayEl) {
+			this.stateDisplayEl = this.contentEl.createDiv({ cls: 'obsaide-wikilink-setup-state' });
+		}
+
+		if (isAnalyzing) {
+			this.stateDisplayEl.removeClass('is-hidden');
+			this.stateDisplayEl.empty();
+			this.stateDisplayEl.createDiv({ cls: 'obsaide-spinner' });
+			this.stateDisplayEl.createSpan({ text: 'Aide is comparing the target content with the selected source material and looking for meaningful connections.' });
+		} else if (this.state === 'cancelled') {
+			this.stateDisplayEl.removeClass('is-hidden');
+			this.stateDisplayEl.empty();
+			this.stateDisplayEl.createSpan({ text: 'Analysis cancelled.', cls: 'obsaide-wikilink-cancelled-text' });
+			window.setTimeout(() => {
+				if (this.stateDisplayEl) this.stateDisplayEl.addClass('is-hidden');
+			}, 1500);
+		} else {
+			this.stateDisplayEl.addClass('is-hidden');
+		}
+
+		// Update buttons
+		this.analyzeButton.disabled = this.state !== 'idle';
+		this.analyzeButton.setText(this.state === 'analyzing' ? 'Analyzing…' : 'Analyze connections');
+
+		// Cancel button text
+		this.cancelButton.setText(this.state === 'analyzing' ? 'Cancel analysis' : 'Cancel');
+
+		// Disable inputs during analysis
+		const inputs = this.contentEl.querySelectorAll('input, button:not(.obsaide-modal-footer button)');
+		inputs.forEach(el => {
+			(el as HTMLInputElement | HTMLButtonElement).disabled = this.state === 'analyzing';
 		});
 	}
 
 	override onClose(): void {
+		if (this.state === 'analyzing') {
+			this.abortController?.abort();
+		}
 		this.contentEl.empty();
 	}
 }

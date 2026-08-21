@@ -1,5 +1,5 @@
 import { Modal, Setting, Notice, type App, type TFolder } from 'obsidian';
-import { FolderPickerModal } from './folder-picker';
+import { FolderPickerModal, FolderSource } from './folder-picker';
 import type { Attachment } from '../context/types';
 
 /** Options for generating a quiz note. */
@@ -22,9 +22,19 @@ export interface QuizNoteOptions {
 	isLoading?: boolean;
 }
 
+/** Question in structured quiz data. */
+export interface QuizQuestion {
+	type: 'short-answer' | 'multiple-choice' | 'true-false' | 'explain' | 'application';
+	question: string;
+	options?: string[];
+	correctIndex?: number;
+	answer?: string;
+	explanation?: string;
+}
+
 /** Modal for configuring and creating a quiz note. */
 export class QuizNoteModal extends Modal {
-	private readonly onSubmit: (options: QuizNoteOptions) => void | Promise<void>;
+	private readonly onSubmit: (options: QuizNoteOptions, signal: AbortSignal) => void | Promise<void>;
 	private readonly attachments: Attachment[];
 	private folderPath = '';
 	private folderName = '';
@@ -33,11 +43,12 @@ export class QuizNoteModal extends Modal {
 	private createButton!: HTMLButtonElement;
 	private cancelButton!: HTMLButtonElement;
 	private isLoading = false;
+	private abortController: AbortController | null = null;
 
 	constructor(
 		app: App,
 		attachments: Attachment[],
-		onSubmit: (options: QuizNoteOptions) => void | Promise<void>,
+		onSubmit: (options: QuizNoteOptions, signal: AbortSignal) => void | Promise<void>,
 	) {
 		super(app);
 		this.attachments = attachments;
@@ -201,16 +212,27 @@ export class QuizNoteModal extends Modal {
 		});
 		this.cancelButton.addEventListener('click', () => this.close());
 
-		// Prevent Escape key from closing during generation
+		// Prevent Escape key from closing during generation - instead cancel
 		const handleKeydown = (e: KeyboardEvent) => {
-			if (this.isLoading && e.key === 'Escape') {
+			if (this.abortController && e.key === 'Escape') {
 				e.preventDefault();
 				e.stopPropagation();
+				this.handleCancel();
 			}
 		};
 		this.contentEl.addEventListener('keydown', handleKeydown);
 		// Store handler to remove on close
 		this.keydownHandler = handleKeydown;
+	}
+
+	private handleCancel(): void {
+		if (this.abortController) {
+			this.abortController.abort();
+			this.abortController = null;
+			this.setLoading(false);
+		} else {
+			this.close();
+		}
 	}
 
 	private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
@@ -222,16 +244,21 @@ export class QuizNoteModal extends Modal {
 	private loadingIndicator!: HTMLElement;
 
 	private openFolderPicker(): void {
-		new FolderPickerModal(this.app, (folder: TFolder) => {
-			this.folderPath = folder.path;
-			this.folderName = folder.path === '' ? '/' : folder.path;
+		new FolderPickerModal(this.app, (folderSource) => {
+			if (folderSource.isRoot) {
+				this.folderPath = '';
+				this.folderName = '/';
+			} else {
+				this.folderPath = folderSource.path;
+				this.folderName = folderSource.path === '' ? '/' : folderSource.path;
+			}
 			this.folderButton.setText(this.folderName);
 		}).open();
 	}
 
 	/** Set loading state - call from outside to show/hide loading */
 	setLoading(loading: boolean): void {
-		this.isLoading = loading;
+		const hasAbortController = !!this.abortController;
 		this.createButton.disabled = loading;
 		this.createButton.setText(loading ? 'Creating quiz…' : 'Create quiz note');
 		this.cancelButton.toggleClass('is-hidden', loading);
@@ -254,7 +281,7 @@ export class QuizNoteModal extends Modal {
 			new Notice('Add some note context before creating a quiz.');
 			return;
 		}
-		if (this.isLoading) return; // Prevent duplicate submissions
+		if (this.abortController) return; // Prevent duplicate submissions
 
 		const options: QuizNoteOptions = {
 			questionCount: this.questionCount,
@@ -264,25 +291,26 @@ export class QuizNoteModal extends Modal {
 			name: this.name,
 			folderPath: this.folderPath,
 			attachments: this.attachments,
-			isLoading: true,
 		};
 
+		this.abortController = new AbortController();
 		this.setLoading(true);
-		void this.onSubmit(options);
+		void this.onSubmit(options, this.abortController.signal);
 	}
 
 	/** Called on generation failure to restore controls */
 	setGenerationFailed(): void {
-		this.isLoading = false;
-		this.createButton.disabled = false;
-		this.createButton.setText('Create quiz note');
-		this.cancelButton.toggleClass('is-hidden', false);
-		this.loadingIndicator.toggleClass('is-hidden', true);
+		this.abortController = null;
+		this.setLoading(false);
 	}
 
 	override onClose(): void {
-		// Prevent closing during generation
-		if (this.isLoading) return;
+		// Prevent closing during generation - abort the request instead
+		if (this.abortController) {
+			this.abortController.abort();
+			this.abortController = null;
+			return;
+		}
 		if (this.keydownHandler) {
 			this.contentEl.removeEventListener('keydown', this.keydownHandler);
 			this.keydownHandler = null;

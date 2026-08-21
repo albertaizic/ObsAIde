@@ -904,10 +904,11 @@
 
 .obsaide-search-icon {
 	position: absolute;
-	left: var(--size-4-2);
+	right: var(--size-4-2);
 	top: 50%;
 	transform: translateY(-50%);
 	color: var(--text-faint);
+	pointer-events: none;
 }
 
 .obsaide-search-icon .svg-icon {
@@ -917,7 +918,7 @@
 
 .obsaide-conversation-search-input {
 	width: 100%;
-	padding: var(--size-4-1) var(--size-4-2) var(--size-4-1) 28px;
+	padding: var(--size-4-1) 32px var(--size-4-1) var(--size-4-2);
 	border-radius: var(--radius-s);
 	border: 1px solid var(--background-modifier-border);
 	background-color: var(--background-modifier-form-field);
@@ -2001,4 +2002,220 @@
 		animation: none;
 		opacity: 0.5;
 	}
+}
+
+/* ------------------------------------------------------------------ wikilink setup modal */
+
+.obsaide-wikilink-setup-modal {
+	max-width: 520px;
+}
+
+.obsaide-wikilink-setup-header {
+	padding: var(--size-4-3);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.obsaide-wikilink-setup-header h3 {
+	margin: 0;
+	font-size: var(--font-ui-medium);
+}
+
+.obsaide-wikilink-setup-section {
+	padding: var(--size-4-2) var(--size-4-3);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.obsaide-wikilink-setup-section-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: var(--size-4-2);
+}
+
+.obsaide-wikilink-setup-section-header h4 {
+	margin: 0;
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+}
+
+.obsaide-wikilink-setup-section-desc {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.obsaide-wikilink-setup-list {
+	max-height: 40vh;
+	overflow-y: auto;
+	padding: var(--size-4-1);
+}
+
+.obsaide-wikilink-setup-item {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-s);
+	background-color: var(--background-secondary);
+	margin-bottom: var(--size-4-1);
+}
+
+.obsaide-wikilink-setup-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.obsaide-wikilink-setup-info {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+}
+
+.obsaide-wikilink-setup-title-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	flex-wrap: wrap;
+}
+
+.obsaide-wikilink-setup-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+	color: var(--text-muted);
+}
+
+.obsaide-wikilink-setup-icon .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.obsaide-wikilink-setup-title {
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.obsaide-wikilink-setup-badge {
+	flex: 0 0 auto;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background-color: var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 0 var(--size-4-1);
+}
+
+.obsaide-wikilink-setup-path {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	font-family: var(--font-monospace);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.obsaide-wikilink-setup-remove {
+	all: unset;
+	cursor: pointer;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	flex: 0 0 auto;
+	margin-left: auto;
+}
+
+.obsaide-wikilink-setup-remove:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-error);
+}
+
+.obsaide-wikilink-setup-remove .svg-icon {
+	width: 12px;
+	height: 12px;
+}
+
+.obsaide-wikilink-setup-empty {
+	padding: var(--size-4-4);
+	text-align: center;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+}
+
+.obsaide-wikilink-setup-section-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: var(--size-4-2);
+}
+
+.obsaide-wikilink-setup-section-header h4 {
+	margin: 0;
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+}
+
+.obsaide-wikilink-setup-section-desc {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.obsaide-wikilink-setup-buttons {
+	display: flex;
+	gap: var(--size-4-1);
+	margin-top: var(--size-4-2);
+}
+
+.obsaide-wikilink-setup-buttons .obsaide-button-small {
+	font-size: var(--font-ui-smaller);
+	padding: var(--size-4-1) var(--size-4-2);
+}
+
+.obsaide-wikilink-setup-state {
+	display: none;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: var(--size-4-2);
+	padding: var(--size-4-4);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	text-align: center;
+}
+
+.obsaide-wikilink-setup-state .obsaide-spinner {
+	width: 20px;
+	height: 20px;
+	border: 2px solid var(--background-modifier-border);
+	border-top-color: var(--interactive-accent);
+	border-radius: 50%;
+	animation: obsaide-spin 0.8s linear infinite;
+}
+
+@keyframes obsaide-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.obsaide-wikilink-setup-state .obsaide-spinner {
+		animation: none;
+		opacity: 0.5;
+	}
+}
+
+.obsaide-wikilink-setup-state.is-hidden {
+	display: none;
+}
+
+.obsaide-wikilink-cancelled-text {
+	color: var(--text-warning);
 }
