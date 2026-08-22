@@ -7,7 +7,7 @@ import { buildSystemPrompt, type AideMode } from '../prompts/system';
 import { AideError, toAideError } from '../providers/errors';
 import type { ProviderService } from '../providers/service';
 import type { ProviderId } from '../providers/types';
-import { collectSecrets, type ObsAideSettings, type AssistantProfile } from '../settings/types';
+import { collectSecrets, type ObsAideSettings, type AssistantProfile, type ContextScope } from '../settings/types';
 import { DEFAULT_PROFILE_ID, getBuiltinProfile, resolveEffectiveSettings } from '../settings/profiles';
 import {
 	composeUserContent,
@@ -157,6 +157,9 @@ export class ChatController {
 		}
 		this.conversation = this.deps.store.create(mode);
 		this.conversation.activeProfileId = activeProfileId;
+		// A new conversation starts with its profile's scope, else the global
+		// default. Existing conversations keep whatever scope they stored.
+		this.conversation.contextScope = activeProfile?.contextScope ?? settings.contextScope;
 		this.emit('conversation');
 	}
 
@@ -209,6 +212,13 @@ export class ChatController {
 	 */
 	setConversationProfile(profileId: string): void {
 		this.conversation.activeProfileId = profileId;
+		this.deps.store.touch(this.conversation);
+		this.emit('structure');
+	}
+
+	/** Change the context scope of the open conversation only. */
+	setContextScope(scope: ContextScope): void {
+		this.conversation.contextScope = scope;
 		this.deps.store.touch(this.conversation);
 		this.emit('structure');
 	}

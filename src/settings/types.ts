@@ -23,11 +23,11 @@ export type ContextScope = 'none' | 'selection' | 'section' | 'note' | 'linked' 
 /** User-facing response length preference. */
 export type ResponseLength = 'short' | 'normal' | 'detailed';
 
-/** Every valid response length, for validation. */
-const RESPONSE_LENGTHS: readonly ResponseLength[] = ['short', 'normal', 'detailed'];
+/** Every valid response length, for validation and pickers. */
+export const RESPONSE_LENGTHS: readonly ResponseLength[] = ['short', 'normal', 'detailed'];
 
-/** Every valid context scope, for validation. */
-const CONTEXT_SCOPES: readonly ContextScope[] = ['none', 'selection', 'section', 'note', 'linked', 'folder'];
+/** Every valid context scope, for validation and pickers. */
+export const CONTEXT_SCOPES: readonly ContextScope[] = ['none', 'selection', 'section', 'note', 'linked', 'folder'];
 
 /** Output mode for custom actions. */
 export type CustomActionOutputMode = 'answer' | 'note-ready' | 'rewrite';

@@ -6,16 +6,32 @@ import { AideError } from '../providers/errors';
 import type { ProviderId } from '../providers/types';
 import { ModelPickerModal } from '../ui/model-picker';
 import { summarize } from '../utils/text';
+import { createCustomProfile } from './profiles';
 import {
 	CONTEXT_CHAR_RANGE,
+	CONTEXT_SCOPES,
 	MAX_OUTPUT_TOKENS_RANGE,
+	RESPONSE_LENGTHS,
 	TEMPERATURE_RANGE,
 	isProviderConfigured,
 	providerLabel,
+	type AssistantProfile,
+	type ContextScope,
 	type CustomAction,
 	type CustomActionContextMode,
 	type CustomActionOutputMode,
+	type ResponseLength,
 } from './types';
+
+/** Display labels for context scopes, shared by the profile cards and dropdowns. */
+const SCOPE_LABELS: Record<ContextScope, string> = {
+	none: 'No context',
+	selection: 'Selection',
+	section: 'Section',
+	note: 'Note',
+	linked: 'Linked notes',
+	folder: 'Folder',
+};
 
 /** The ObsAIde settings tab. */
 export class ObsAideSettingTab extends PluginSettingTab {
@@ -34,9 +50,10 @@ export class ObsAideSettingTab extends PluginSettingTab {
 		containerEl.addClass('obsaide-settings');
 
 		this.renderGeneral(containerEl);
-		this.renderResponseLength(containerEl);
+		this.renderProfiles(containerEl);
 		this.renderCustomActions(containerEl);
 		this.renderProviders(containerEl);
+		this.renderResponseLength(containerEl);
 		this.renderContext(containerEl);
 		this.renderPrivacy(containerEl);
 	}
@@ -152,6 +169,156 @@ export class ObsAideSettingTab extends PluginSettingTab {
 						await this.save();
 					}),
 			);
+	}
+
+	// --- profiles ------------------------------------------------------------
+
+	private renderProfiles(container: HTMLElement): void {
+		new Setting(container).setName('Assistant profiles').setHeading();
+
+		container.createEl('p', {
+			cls: 'setting-item-description obsaide-settings-note',
+			text: 'A profile combines standing instructions with optional provider, model, response-length and context defaults. Switch profiles from the Aide sidebar header; the switch applies to the open conversation and to new ones.',
+		});
+
+		new Setting(container)
+			.setName('Add profile')
+			.addButton((button) =>
+				button
+					.setButtonText('Create profile')
+					.setCta()
+					.onClick(() => this.openProfileModal(null)),
+			);
+
+		const list = container.createDiv({ cls: 'obsaide-custom-actions-list obsaide-profile-list' });
+		for (const profile of this.plugin.profiles.getAll()) {
+			this.renderProfileItem(list, profile);
+		}
+	}
+
+	private renderProfileItem(container: HTMLElement, profile: AssistantProfile): void {
+		const settings = this.plugin.settings;
+		const card = container.createDiv({ cls: 'obsaide-custom-action-card obsaide-profile-card' });
+		card.toggleClass('is-disabled', !profile.enabled);
+
+		const header = card.createDiv({ cls: 'obsaide-custom-action-header' });
+		const titleRow = header.createDiv({ cls: 'obsaide-custom-action-title-row' });
+		setIcon(titleRow.createSpan({ cls: 'obsaide-custom-action-icon' }), profile.icon || 'message-square');
+		titleRow.createSpan({ cls: 'obsaide-custom-action-title', text: profile.name });
+		header.createSpan({
+			cls: `obsaide-custom-action-status ${profile.enabled ? 'is-enabled' : ''}`,
+			text: profile.isBuiltIn ? 'Built-in' : profile.enabled ? 'Enabled' : 'Disabled',
+		});
+
+		const badges = card.createDiv({ cls: 'obsaide-custom-action-badges' });
+		badges.createSpan({
+			cls: 'obsaide-custom-action-badge',
+			text: profile.providerId ? providerLabel(settings, profile.providerId) : 'Current provider',
+		});
+		badges.createSpan({
+			cls: 'obsaide-custom-action-badge',
+			text: profile.model ? summarize(profile.model, 28) : 'Current model',
+		});
+		const lengthBadge = profile.responseLength
+			? profile.responseLength[0]!.toUpperCase() + profile.responseLength.slice(1)
+			: 'Current length';
+		badges.createSpan({ cls: 'obsaide-custom-action-badge', text: lengthBadge });
+		badges.createSpan({
+			cls: 'obsaide-custom-action-badge',
+			text: profile.contextScope
+				? SCOPE_LABELS[profile.contextScope]
+				: 'Default context',
+		});
+
+		if (profile.instructions.trim()) {
+			card.createDiv({
+				cls: 'obsaide-custom-action-preview',
+				text: summarize(profile.instructions.trim(), 140),
+			});
+		}
+
+		const footer = card.createDiv({ cls: 'obsaide-custom-action-footer' });
+		if (!profile.isBuiltIn) {
+			footer
+				.createEl('button', { cls: 'obsaide-button is-small', text: 'Edit' })
+				.addEventListener('click', () => this.openProfileModal(profile));
+			footer
+				.createEl('button', {
+					cls: 'obsaide-button is-small',
+					text: profile.enabled ? 'Disable' : 'Enable',
+				})
+				.addEventListener('click', () => {
+					void this.plugin.profiles
+						.update(profile.id, { enabled: !profile.enabled })
+						.then(() => this.display());
+				});
+		}
+		footer
+			.createEl('button', { cls: 'obsaide-button is-small', text: 'Duplicate' })
+			.addEventListener('click', () => {
+				void this.plugin.profiles.duplicate(profile.id).then(() => this.display());
+			});
+		if (!profile.isBuiltIn) {
+			footer
+				.createEl('button', { cls: 'obsaide-button is-small is-danger', text: 'Delete' })
+				.addEventListener('click', () => {
+					new ConfirmDeleteModal(this.app, 'profile', profile.name, () => {
+						void this.plugin.profiles.delete(profile.id).then(() => this.display());
+					}).open();
+				});
+		}
+	}
+
+	private openProfileModal(profile: AssistantProfile | null): void {
+		const settings = this.plugin.settings;
+		const isEditing = profile !== null;
+		const data = profile
+			? {
+				name: profile.name,
+				icon: profile.icon,
+				instructions: profile.instructions,
+				providerId: profile.providerId ?? '',
+				model: profile.model ?? '',
+				responseLength: profile.responseLength ?? '',
+				contextScope: profile.contextScope ?? '',
+			}
+			: {
+				name: '',
+				icon: 'message-square',
+				instructions: '',
+				providerId: '',
+				model: '',
+				responseLength: '',
+				contextScope: '',
+			};
+
+		new ProfileModal(
+			this.app,
+			data,
+			isEditing,
+			listProviderDescriptors().map(
+				(descriptor): readonly [string, string] => [descriptor.id, providerLabel(settings, descriptor.id)],
+			),
+			(result) => {
+				void (async () => {
+					const overrides = {
+						name: result.name,
+						icon: result.icon,
+						instructions: result.instructions,
+						providerId: (result.providerId || undefined) as ProviderId | undefined,
+						model: result.model.trim() || undefined,
+						responseLength: (result.responseLength || undefined) as ResponseLength | undefined,
+						contextScope: (result.contextScope || undefined) as ContextScope | undefined,
+					};
+					if (isEditing && profile) {
+						await this.plugin.profiles.update(profile.id, overrides);
+					} else {
+						await this.plugin.profiles.add(createCustomProfile(overrides));
+					}
+					this.display();
+				})();
+			},
+		).open();
 	}
 
 	// --- providers -----------------------------------------------------------
@@ -389,6 +556,21 @@ export class ObsAideSettingTab extends PluginSettingTab {
 					await this.save();
 				}),
 			);
+
+		new Setting(container)
+			.setName('Default context for new conversations')
+			.setDesc(
+				'What new conversations attach automatically. Selection, section and note need an open editor at the moment the conversation starts; if unavailable, nothing is attached and the composer says so — nothing else is substituted. Existing conversations keep their own scope.',
+			)
+			.addDropdown((dropdown) => {
+				for (const scope of CONTEXT_SCOPES) {
+					dropdown.addOption(scope, SCOPE_LABELS[scope]);
+				}
+				dropdown.setValue(settings.contextScope).onChange(async (value) => {
+					settings.contextScope = value as ContextScope;
+					await this.save();
+				});
+			});
 	}
 
 	// --- privacy -------------------------------------------------------------
@@ -557,7 +739,7 @@ export class ObsAideSettingTab extends PluginSettingTab {
 		footer
 			.createEl('button', { cls: 'obsaide-button is-small is-danger', text: 'Delete' })
 			.addEventListener('click', () => {
-				new ConfirmDeleteModal(this.app, action.name, () => {
+				new ConfirmDeleteModal(this.app, 'custom action', action.name, () => {
 					const idx = this.plugin.settings.customActions.indexOf(action);
 					if (idx >= 0) {
 						this.plugin.settings.customActions.splice(idx, 1);
@@ -705,11 +887,135 @@ class CustomActionModal extends Modal {
 	}
 }
 
-/** Confirms before a custom action is permanently removed. */
+/** Editable profile fields; empty override strings mean "use the current default". */
+interface ProfileDraft {
+	name: string;
+	icon: string;
+	instructions: string;
+	providerId: string;
+	model: string;
+	responseLength: string;
+	contextScope: string;
+}
+
+/** Modal for creating/editing an assistant profile. */
+class ProfileModal extends Modal {
+	private readonly data: ProfileDraft;
+
+	constructor(
+		app: App,
+		initial: ProfileDraft,
+		private readonly isEditing: boolean,
+		private readonly providerOptions: ReadonlyArray<readonly [string, string]>,
+		private readonly onSubmit: (draft: ProfileDraft) => void,
+	) {
+		super(app);
+		this.data = { ...initial };
+	}
+
+	override onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass('obsaide-custom-action-modal');
+		this.setTitle(this.isEditing ? 'Edit profile' : 'New profile');
+		const data = this.data;
+
+		new Setting(contentEl)
+			.setName('Name')
+			.addText((text) =>
+				text
+					.setPlaceholder('Exam prep')
+					.setValue(data.name)
+					.onChange((value) => (data.name = value.trim())),
+			);
+
+		new Setting(contentEl)
+			.setName('Icon')
+			.setDesc('Any Obsidian icon name, shown next to the profile.')
+			.addText((text) =>
+				text
+					.setValue(data.icon || 'message-square')
+					.onChange((value) => (data.icon = value.trim() || 'message-square')),
+			);
+
+		new Setting(contentEl)
+			.setName('Instructions')
+			.setDesc('Added to the system prompt while this profile is active.')
+			.addTextArea((textarea) => {
+				textarea
+					.setPlaceholder('You are a study coach. Always end with one practice question…')
+					.setValue(data.instructions)
+					.onChange((value) => (data.instructions = value));
+				textarea.inputEl.rows = 5;
+			});
+
+		new Setting(contentEl)
+			.setName('Provider')
+			.setDesc('Follows the provider chosen elsewhere unless overridden here.')
+			.addDropdown((dropdown) => {
+				dropdown.addOption('', 'Use current');
+				for (const [id, label] of this.providerOptions) dropdown.addOption(id, label);
+				dropdown.setValue(data.providerId).onChange((value) => (data.providerId = value));
+			});
+
+		new Setting(contentEl)
+			.setName('Model')
+			.setDesc('Leave empty to use the selected provider’s current model.')
+			.addText((text) =>
+				text
+					.setPlaceholder('Use current model')
+					.setValue(data.model)
+					.onChange((value) => (data.model = value.trim())),
+			);
+
+		new Setting(contentEl)
+			.setName('Response length')
+			.addDropdown((dropdown) => {
+				dropdown.addOption('', 'Use current');
+				for (const length of RESPONSE_LENGTHS) dropdown.addOption(length, length[0]!.toUpperCase() + length.slice(1));
+				dropdown.setValue(data.responseLength).onChange((value) => (data.responseLength = value));
+			});
+
+		new Setting(contentEl)
+			.setName('Default context scope')
+			.setDesc('Applied to new conversations started with this profile active.')
+			.addDropdown((dropdown) => {
+				dropdown.addOption('', 'Use default');
+				for (const scope of CONTEXT_SCOPES) {
+					dropdown.addOption(scope, SCOPE_LABELS[scope]);
+				}
+				dropdown.setValue(data.contextScope).onChange((value) => (data.contextScope = value));
+			});
+
+		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
+		buttons.createEl('button', {
+			cls: 'obsaide-button is-cta',
+			text: this.isEditing ? 'Save' : 'Create',
+		}).addEventListener('click', () => {
+			if (!data.name.trim()) {
+				new Notice('Please enter a name');
+				return;
+			}
+			this.onSubmit(data);
+			this.close();
+		});
+		buttons.createEl('button', {
+			cls: 'obsaide-button',
+			text: 'Cancel',
+		}).addEventListener('click', () => this.close());
+	}
+
+	override onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
+/** Confirms before something (custom action, profile…) is permanently removed. */
 class ConfirmDeleteModal extends Modal {
 	constructor(
 		app: App,
-		private readonly actionName: string,
+		private readonly noun: string,
+		private readonly targetName: string,
 		private readonly onConfirm: () => void,
 	) {
 		super(app);
@@ -717,10 +1023,10 @@ class ConfirmDeleteModal extends Modal {
 
 	override onOpen(): void {
 		const { contentEl } = this;
-		this.setTitle('Delete custom action');
+		this.setTitle(`Delete ${this.noun}`);
 		contentEl.createEl('p', {
 			cls: 'obsaide-modal-description',
-			text: `“${this.actionName}” will be permanently deleted. This cannot be undone.`,
+			text: `“${this.targetName}” will be permanently deleted. This cannot be undone.`,
 		});
 		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
 		buttons

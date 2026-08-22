@@ -21,7 +21,7 @@ import {
 import { AIDE_ACTIONS } from '../actions/registry';
 import { describeCustomActionAvailability, runAction, runCustomAction } from '../actions/runner';
 import type { ChatController, SendRequest } from '../chat/controller';
-import { isEmptyConversation, conversationTitle, type Conversation, type ConversationMessage } from '../chat/conversation';
+import { isEmptyConversation, conversationTitle, effectiveContextScope, type Conversation, type ConversationMessage } from '../chat/conversation';
 import type { QuizQuestion } from './quiz-note-modal';
 import { buildConversationExportContent, sanitizeExportName, type ConversationExportMode as ExportMode } from '../chat/export';
 import { buildContextBlock } from '../context/resolve';
@@ -136,9 +136,9 @@ export class AideChatView extends ItemView {
 				void this.controller.saveSettings();
 			},
 			onChangeScope: (scope) => {
-				const settings = this.controller.getSettings();
-				settings.contextScope = scope;
-				void this.controller.saveSettings();
+				// The scope is a per-conversation choice; the Settings tab decides
+				// what *new* conversations start with.
+				this.controller.setContextScope(scope);
 				void this.applyScopeContext();
 			},
 		}, this.app);
@@ -149,8 +149,12 @@ export class AideChatView extends ItemView {
 				return;
 			}
 			// A different transcript is now on screen, so start at the latest
-			// message however the previous one was scrolled.
-			if (reason === 'conversation') this.scroller.pin();
+			// message however the previous one was scrolled. Its scope decides
+			// what context is attached, applied without opening any picker.
+			if (reason === 'conversation') {
+				this.scroller.pin();
+				void this.applyScopeContext(true);
+			}
 			void this.renderAll();
 		});
 
@@ -158,6 +162,9 @@ export class AideChatView extends ItemView {
 		this.contentEl.addEventListener('focusin', () => this.captureLastEditorContext());
 
 		await this.renderAll();
+		// Reflect the conversation's scope in the composer from the start,
+		// attaching whatever the scope can capture right now.
+		void this.applyScopeContext(true);
 	}
 
 	/** Capture the current editor context (editor, file, view, cursor) for section context. */
@@ -560,7 +567,7 @@ export class AideChatView extends ItemView {
 		});
 	}
 
-	private async applyScopeContext(): Promise<void> {
+	private async applyScopeContext(quiet = false): Promise<void> {
 		// Clear existing scope-based attachments (keep manual/@note attachments)
 		const manualAttachments = this.attachments.filter(
 			(a) => a.kind === 'note' || a.kind === 'folder',
@@ -569,7 +576,8 @@ export class AideChatView extends ItemView {
 		// For simplicity, we'll just clear all auto-captured context
 		this.attachments = manualAttachments;
 
-		const scope = this.controller.getSettings().contextScope ?? 'selection';
+		const settings = this.controller.getSettings();
+		const scope = effectiveContextScope(this.controller.current, settings.contextScope);
 		if (scope === 'none') {
 			this.composer.setAttachments(this.attachments);
 			this.composer.setScope('none');
@@ -623,6 +631,13 @@ export class AideChatView extends ItemView {
 			// `manualAttachments` filter above); otherwise there is nothing to
 			// send until the user picks one.
 			const hasFolder = this.attachments.some((a) => a.kind === 'folder');
+			if (!hasFolder && quiet) {
+				// Automatic application never pops a picker mid-conversation;
+				// say plainly that nothing will be sent until one is chosen.
+				this.composer.setAttachments(this.attachments);
+				this.composer.setScope(scope, 'no folder selected');
+				return;
+			}
 			if (!hasFolder) {
 				new FolderPickerModal(this.app, (folderSource) => {
 					if (folderSource.isRoot) {
@@ -1332,7 +1347,7 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 		this.modeBadge.toggleClass('is-visible', conversation.mode === 'tutor');
 
 		// Update context scope label
-		const scope = this.controller.getSettings().contextScope ?? 'none';
+		const scope = effectiveContextScope(conversation, settings.contextScope);
 		if (scope === 'none') {
 			this.composer.setScope('none');
 		} else {

@@ -2,6 +2,7 @@ import type { NoteEditAnchor } from '../actions/anchor';
 import type { Attachment } from '../context/types';
 import type { AideMode } from '../prompts/system';
 import type { ChatMessage, ProviderId } from '../providers/types';
+import type { ContextScope } from '../settings/types';
 import { createId } from '../utils/id';
 import { summarize } from '../utils/text';
 
@@ -57,6 +58,22 @@ export interface Conversation {
 	branchName?: string;
 	/** Active profile ID for this conversation. */
 	activeProfileId?: string;
+	/**
+	 * Context scope chosen for this conversation. Absent in conversations from
+	 * before scopes became per-conversation; those follow the global default.
+	 */
+	contextScope?: ContextScope;
+}
+
+/**
+ * The scope a conversation runs with: its own choice when it has one, else the
+ * global default (which is what conversations without a stored scope used).
+ */
+export function effectiveContextScope(
+	conversation: Pick<Conversation, 'contextScope'>,
+	fallback: ContextScope,
+): ContextScope {
+	return conversation.contextScope ?? fallback;
 }
 
 export function createConversation(mode: AideMode): Conversation {
@@ -137,6 +154,8 @@ export function createBranch(
 	branch.messages = parent.messages.slice(0, messageIndex + 1).map(msg => ({ ...msg }));
 	branch.parentConversationId = parent.id;
 	branch.branchedFromMessageId = branchedFromMessageId;
+	branch.activeProfileId = parent.activeProfileId;
+	branch.contextScope = parent.contextScope;
 	// Use a clean branch indicator that doesn't compound when branching a branch
 	const rootTitle = getRootConversationTitle(parent);
 	branch.branchName = `${rootTitle} · Branch`;
