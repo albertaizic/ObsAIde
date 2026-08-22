@@ -1,8 +1,12 @@
 import { Modal, Notice, Setting, type App } from 'obsidian';
 import { ASSISTANT_NAME } from '../constants';
+import { validateExportInput, type ConversationExportMode as ExportMode } from '../chat/export';
 import { FolderPickerModal } from './folder-picker';
 
-export type ExportMode = 'questions-answers' | 'answers-only';
+// The canonical validator lives in chat/export.ts (importable without
+// Obsidian); re-exported so modal consumers can find it here.
+export { validateExportInput };
+export type { ExportMode };
 
 export interface ConversationExportResult {
 	name: string;
@@ -14,26 +18,6 @@ export interface ConversationExportOptions {
 	defaultName: string;
 	defaultFolder: string;
 	onExport: (result: ConversationExportResult) => void;
-}
-
-/** Result of checking export inputs: either a ready-to-run export or why not. */
-export type ExportValidation =
-	| { valid: true; name: string; folder: string; mode: ExportMode }
-	| { valid: false; reason: 'missing-name' | 'missing-mode' };
-
-/**
- * Validate the export modal's inputs before anything is written.
- * The name is trimmed; a missing name or unselected mode blocks the export.
- */
-export function validateExportInput(
-	rawName: string,
-	rawFolder: string,
-	mode: ExportMode | null,
-): ExportValidation {
-	const trimmedName = rawName.trim();
-	if (!trimmedName) return { valid: false, reason: 'missing-name' };
-	if (!mode) return { valid: false, reason: 'missing-mode' };
-	return { valid: true, name: trimmedName, folder: rawFolder.trim(), mode };
 }
 
 /**

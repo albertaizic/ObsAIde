@@ -8,6 +8,7 @@ import {
 	normalizeSettings,
 	providerLabel,
 	resolveBaseUrl,
+	SCHEMA_VERSION,
 } from './types';
 import { PROVIDER_IDS } from '../providers/types';
 
@@ -137,5 +138,80 @@ describe('collectSecrets', () => {
 		settings.providers.openai.apiKey = 'sk-one';
 		settings.providers.groq.apiKey = 'gsk-two';
 		expect(collectSecrets(settings).sort()).toEqual(['gsk-two', 'sk-one']);
+	});
+});
+
+describe('normalizeSettings contextScope', () => {
+	it('keeps a valid stored scope', () => {
+		expect(normalizeSettings({ contextScope: 'linked' }).contextScope).toBe('linked');
+		expect(normalizeSettings({ contextScope: 'folder' }).contextScope).toBe('folder');
+	});
+
+	it('coerces an invalid stored scope back to the default "none"', () => {
+		expect(normalizeSettings({ contextScope: 'garbage' }).contextScope).toBe('none');
+		expect(normalizeSettings({ contextScope: 42 }).contextScope).toBe('none');
+	});
+});
+
+describe('profile normalization', () => {
+	const baseProfile = {
+		id: 'tutor',
+		name: 'Tutor',
+		icon: 'graduation-cap',
+		instructions: 'Teach.',
+		enabled: true,
+		isBuiltIn: false,
+	};
+
+	it('validates a profile contextScope against the known scopes', () => {
+		expect(
+			normalizeSettings({ profiles: [{ ...baseProfile, contextScope: 'nope' }] })
+				.profiles[0]?.contextScope,
+		).toBeUndefined();
+		expect(
+			normalizeSettings({ profiles: [{ ...baseProfile, contextScope: 'section' }] })
+				.profiles[0]?.contextScope,
+		).toBe('section');
+		expect(
+			normalizeSettings({ profiles: [baseProfile] }).profiles[0]?.contextScope,
+		).toBeUndefined();
+	});
+
+	it('leaves an unknown or missing profile responseLength undefined rather than "normal"', () => {
+		expect(
+			normalizeSettings({ profiles: [{ ...baseProfile, responseLength: 'gigantic' }] })
+				.profiles[0]?.responseLength,
+		).toBeUndefined();
+		expect(
+			normalizeSettings({ profiles: [baseProfile] }).profiles[0]?.responseLength,
+		).toBeUndefined();
+		expect(
+			normalizeSettings({ profiles: [{ ...baseProfile, responseLength: 'short' }] })
+				.profiles[0]?.responseLength,
+		).toBe('short');
+	});
+});
+
+describe('needsMigration contextScope and schema checks', () => {
+	it('is true when the stored contextScope differs from the normalized one', () => {
+		const raw = { ...createDefaultSettings(), contextScope: 'selection' };
+		expect(needsMigration(raw, createDefaultSettings())).toBe(true);
+	});
+
+	it('is true when the stored contextScope gets coerced during normalization', () => {
+		const raw = { ...createDefaultSettings(), contextScope: 'everything' };
+		expect(needsMigration(raw, normalizeSettings(raw))).toBe(true);
+	});
+
+	it('is false when the stored contextScope matches what was normalized', () => {
+		const settings = createDefaultSettings();
+		const raw = { ...settings };
+		expect(needsMigration(raw, normalizeSettings(raw))).toBe(false);
+	});
+
+	it('is still true when only the schema version differs', () => {
+		const settings = createDefaultSettings();
+		const raw = { ...settings, schemaVersion: SCHEMA_VERSION + 1 };
+		expect(needsMigration(raw, normalizeSettings(raw))).toBe(true);
 	});
 });

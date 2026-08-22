@@ -1,55 +1,77 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { validateExportInput } from '../chat/export';
 
 /**
- * `ConversationExportModal` needs a real Obsidian `Modal`/DOM environment to
- * mount, so these tests exercise the state machine it is built on rather
- * than the DOM: the mode must be chosen before export is possible, and there
- * is exactly one export step (no follow-up question after the mode/name are
- * set).
+ * The export gate lives in chat/export.ts so it is importable without a real
+ * Obsidian `Modal`/DOM environment: nothing exports until there is a usable
+ * name and a chosen mode, and what comes out is exactly what gets written.
  */
-describe('ConversationExportModal state machine', () => {
-	type ExportMode = 'questions-answers' | 'answers-only';
-
-	interface ExportState {
-		name: string;
-		folder: string;
-		mode: ExportMode | null;
-	}
-
-	function canExport(state: ExportState): boolean {
-		return state.name.trim().length > 0 && state.mode !== null;
-	}
-
-	it('cannot export until a mode is chosen', () => {
-		const state: ExportState = { name: 'My Conversation', folder: '', mode: null };
-		expect(canExport(state)).toBe(false);
+describe('validateExportInput', () => {
+	it('rejects an empty name as missing-name', () => {
+		expect(validateExportInput('', 'Notes', 'answers-only')).toEqual({
+			valid: false,
+			reason: 'missing-name',
+		});
 	});
 
-	it('cannot export without a name even if a mode is chosen', () => {
-		const state: ExportState = { name: '  ', folder: '', mode: 'answers-only' };
-		expect(canExport(state)).toBe(false);
+	it('rejects a whitespace-only name as missing-name', () => {
+		expect(validateExportInput('   ', 'Notes', 'questions-answers')).toEqual({
+			valid: false,
+			reason: 'missing-name',
+		});
 	});
 
-	it('can export once both a name and a mode are set', () => {
-		const state: ExportState = { name: 'My Conversation', folder: 'Notes', mode: 'questions-answers' };
-		expect(canExport(state)).toBe(true);
+	it('rejects a missing name regardless of the mode', () => {
+		expect(validateExportInput('\t\n', '', null)).toEqual({
+			valid: false,
+			reason: 'missing-name',
+		});
 	});
 
-	it('the export callback fires exactly once, with the mode already decided', () => {
-		const onExport = vi.fn();
-		const state: ExportState = { name: 'My Conversation', folder: '', mode: 'answers-only' };
+	it('requires a mode once a name is present', () => {
+		expect(validateExportInput('My Conversation', 'Notes', null)).toEqual({
+			valid: false,
+			reason: 'missing-mode',
+		});
+	});
 
-		function submit(): void {
-			if (!canExport(state)) return;
-			onExport({ name: state.name.trim(), folder: state.folder.trim(), mode: state.mode });
-		}
-
-		submit();
-		expect(onExport).toHaveBeenCalledTimes(1);
-		expect(onExport).toHaveBeenCalledWith({
+	it('accepts answers-only exports', () => {
+		expect(validateExportInput('My Conversation', 'Notes', 'answers-only')).toEqual({
+			valid: true,
 			name: 'My Conversation',
-			folder: '',
+			folder: 'Notes',
 			mode: 'answers-only',
+		});
+	});
+
+	it('accepts questions-answers exports', () => {
+		expect(validateExportInput('My Conversation', 'Notes', 'questions-answers')).toEqual({
+			valid: true,
+			name: 'My Conversation',
+			folder: 'Notes',
+			mode: 'questions-answers',
+		});
+	});
+
+	it('trims the returned name and folder on success', () => {
+		expect(
+			validateExportInput('  Spaced Repetition  ', '  Notes/Studying  ', 'answers-only'),
+		).toEqual({
+			valid: true,
+			name: 'Spaced Repetition',
+			folder: 'Notes/Studying',
+			mode: 'answers-only',
+		});
+	});
+
+	it('trims the folder even when only the name carries surrounding spaces', () => {
+		expect(
+			validateExportInput('Clean Name', '  Folder With Spaces  ', 'questions-answers'),
+		).toEqual({
+			valid: true,
+			name: 'Clean Name',
+			folder: 'Folder With Spaces',
+			mode: 'questions-answers',
 		});
 	});
 });

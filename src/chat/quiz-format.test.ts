@@ -1,282 +1,269 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import type { QuizQuestion } from './quiz-format';
+import { parseQuizJson, renderQuizMarkdown, validateQuizData } from './quiz-format';
+import {
+	buildQuizUserPrompt,
+	getDifficultyInstruction,
+	getTypeInstruction,
+} from '../prompts/quiz';
 
-/**
- * Regex-based validation matching the logic in AideChatView.validateQuizFormat
- * Tests the exact format requirements for generated quiz notes.
- */
-
-function validateQuizFormat(content: string, expectedCount: number, includeAnswers: boolean): { valid: boolean; error?: string } {
-	// Check for code fences wrapping the whole content
-	if (content.startsWith('```')) {
-		return { valid: false, error: 'Response wrapped in code fence' };
-	}
-
-	// Count "## Problem N" headings
-	const problemMatches = content.match(/^## Problem \d+/gm);
-	const problemCount = problemMatches ? problemMatches.length : 0;
-	if (problemCount !== expectedCount) {
-		return { valid: false, error: `Expected ${expectedCount} problems, found ${problemCount}` };
-	}
-
-	// Check each problem has bold question text
-	const boldQuestionMatches = content.match(/\*\*[^*]+\?\*\*/g);
-	const boldQuestionCount = boldQuestionMatches ? boldQuestionMatches.length : 0;
-	if (boldQuestionCount < expectedCount) {
-		return { valid: false, error: 'Missing bold question text' };
-	}
-
-	// If answers enabled, check for answer callouts
-	if (includeAnswers) {
-		const answerCalloutMatches = content.match(/^> \[!answer\]- ✅ Answer/mg);
-		const answerCount = answerCalloutMatches ? answerCalloutMatches.length : 0;
-		if (answerCount !== expectedCount) {
-			return { valid: false, error: `Expected ${expectedCount} answer callouts, found ${answerCount}` };
-		}
-	}
-
-	// Check no separate Answer Key section
-	if (content.includes('Answer Key') || content.includes('answer key') || content.includes('ANSWER KEY')) {
-		return { valid: false, error: 'Contains separate Answer Key section' };
-	}
-
-	return { valid: true };
+function shortAnswer(overrides: Partial<QuizQuestion> = {}): QuizQuestion {
+	return {
+		type: 'short-answer',
+		question: 'What is binary search?',
+		answer: 'An algorithm that halves a sorted range each step.',
+		explanation: 'Each comparison discards half of the remaining elements.',
+		...overrides,
+	};
 }
 
-describe('Quiz format validation', () => {
-	const validQuizWithAnswers = `# Binary Search Quiz
+function multipleChoice(overrides: Partial<QuizQuestion> = {}): QuizQuestion {
+	return {
+		type: 'multiple-choice',
+		question: 'What does binary search require?',
+		options: ['Sorted input', 'Hash table', 'Linked list', 'Random access only'],
+		correctIndex: 0,
+		answer: 'Sorted input',
+		explanation: 'Discarding half is only safe when the range is ordered.',
+		...overrides,
+	};
+}
 
-## Problem 1
-**What is binary search?**
+function trueFalse(overrides: Partial<QuizQuestion> = {}): QuizQuestion {
+	return {
+		type: 'true-false',
+		question: 'Binary search needs sorted input.',
+		answer: 'True.',
+		explanation: 'Ordering is what makes half-range discarding safe.',
+		...overrides,
+	};
+}
 
-> [!answer]- ✅ Answer
-> Binary search is an efficient algorithm for finding an item in a sorted array.
-
-## Problem 2
-**What is the time complexity?**
-
-> [!answer]- ✅ Answer
-> O(log n) because the search space is halved each iteration.`;
-
-	const validQuizWithoutAnswers = `# Binary Search Quiz
-
-## Problem 1
-**What is binary search?**
-
-## Problem 2
-**What is the time complexity?**`;
-
-	const quizWithMultipleChoice = `# Binary Search Quiz
-
-## Problem 1
-**Which of the following describes binary search?**
-
-- A. Linear scan
-- B. Divide and conquer
-- C. Hash lookup
-- D. Tree traversal
-
-> [!answer]- ✅ Answer
-> **B. Divide and conquer** — binary search halves the search space each step.`;
-
-const quizWithTrueFalse = `# Binary Search Quiz
-
-## Problem 1
-**True or False: Binary search can correctly discard half of an unsorted collection after each comparison?**
-
-> [!answer]- ✅ Answer
-> **False.** Binary search requires ordering; without it, the comparison does not tell us which half can safely be discarded.`;
-
-const quizWithExplain = `# Binary Search Quiz
-
-## Problem 1
-**Why does repeatedly halving the search range lead to O(log n) time complexity?**
-
-> [!answer]- ✅ Answer
-> After k halvings, the remaining size is approximately n / 2^k. Reaching one element therefore requires k ≈ log₂(n) steps.`;
-
-const quizWithApplication = `# Binary Search Quiz
-
-## Problem 1
-**You have a sorted array of 1,000,000 values. You search for a value that is not present using binary search. Approximately how many comparisons are needed in the worst case?**
-
-> [!answer]- ✅ Answer
-> About **20 comparisons**, because log₂(1,000,000) is approximately 19.9.`;
-
-	it('accepts valid quiz with answers', () => {
-		const result = validateQuizFormat(validQuizWithAnswers, 2, true);
-		expect(result.valid).toBe(true);
+describe('parseQuizJson', () => {
+	const payload = JSON.stringify({
+		questions: [{ type: 'short-answer', question: 'What is O(log n)?' }],
 	});
 
-	it('accepts valid quiz without answers', () => {
-		const result = validateQuizFormat(validQuizWithoutAnswers, 2, false);
-		expect(result.valid).toBe(true);
+	it('parses a plain JSON response', () => {
+		const result = parseQuizJson(payload);
+		expect(result).not.toBeNull();
+		expect(result?.questions).toHaveLength(1);
+		expect(result?.questions[0]?.question).toBe('What is O(log n)?');
 	});
 
-	it('accepts valid multiple choice quiz', () => {
-		const result = validateQuizFormat(quizWithMultipleChoice, 1, true);
-		expect(result.valid).toBe(true);
+	it('parses a response wrapped in a ```json fence', () => {
+		const result = parseQuizJson('```json\n' + payload + '\n```');
+		expect(result?.questions).toHaveLength(1);
 	});
 
-	it('accepts valid true/false quiz', () => {
-		const result = validateQuizFormat(quizWithTrueFalse, 1, true);
-		expect(result.valid).toBe(true);
+	it('tolerates trailing prose after a closing fence', () => {
+		const result = parseQuizJson('```json\n' + payload + '\n```\nHere is your quiz!');
+		expect(result?.questions).toHaveLength(1);
 	});
 
-	it('accepts valid explain/reasoning quiz', () => {
-		const result = validateQuizFormat(quizWithExplain, 1, true);
-		expect(result.valid).toBe(true);
+	it('returns null on non-JSON text', () => {
+		expect(parseQuizJson('Sorry, I could not generate a quiz.')).toBeNull();
 	});
 
-	it('accepts valid application/scenario quiz', () => {
-		const result = validateQuizFormat(quizWithApplication, 1, true);
-		expect(result.valid).toBe(true);
+	it('returns null when there is no questions array', () => {
+		expect(parseQuizJson(JSON.stringify({ quiz: [] }))).toBeNull();
+		expect(parseQuizJson(JSON.stringify({ questions: 3 }))).toBeNull();
 	});
 
-	it('accepts valid mixed quiz with 5 questions (one of each type)', () => {
-	const mixedQuiz = `# Binary Search Quiz
-
-## Problem 1
-**What is binary search?**
-
-> [!answer]- ✅ Answer
-> Binary search is an efficient algorithm for finding an item in a sorted array.
-
-## Problem 2
-**Which of the following describes binary search?**
-
-- A. Linear scan
-- B. Divide and conquer
-- C. Hash lookup
-- D. Tree traversal
-
-> [!answer]- ✅ Answer
-> **B. Divide and conquer** — binary search halves the search space each step.
-
-## Problem 3
-**True or False: Binary search requires the array to be sorted.**
-
-> [!answer]- ✅ Answer
-> **True.** The algorithm depends on the ordering to determine which half can be discarded.
-
-## Problem 4
-**Why does binary search have logarithmic time complexity?**
-
-> [!answer]- ✅ Answer
-> Each comparison halves the search space, so after k steps the remaining size is n/2^k.
-
-## Problem 5
-**If you search for a missing value in a sorted array of 1,024 elements, how many comparisons in the worst case?**
-
-> [!answer]- ✅ Answer
-> About **10 comparisons**, because log₂(1024) = 10.`;
-		});
-
-	it('accepts valid multiple choice quiz', () => {
-		const result = validateQuizFormat(quizWithMultipleChoice, 1, true);
-		expect(result.valid).toBe(true);
-	});
-
-	it('rejects quiz wrapped in code fence', () => {
-		const fencedQuiz = '```markdown\n' + validQuizWithAnswers + '\n```';
-		const result = validateQuizFormat(fencedQuiz, 2, true);
-		expect(result.valid).toBe(false);
-		expect(result.error).toContain('code fence');
-	});
-
-	it('rejects wrong problem count', () => {
-		const result = validateQuizFormat(validQuizWithAnswers, 5, true);
-		expect(result.valid).toBe(false);
-		expect(result.error).toContain('Expected 5 problems, found 2');
-	});
-
-	it('rejects missing bold question text', () => {
-		const noBold = '# Quiz\n\n## Problem 1\nWhat is binary search?\n\n> [!answer]- ✅ Answer\n> Answer here.';
-		const result = validateQuizFormat(noBold, 1, true);
-		expect(result.valid).toBe(false);
-		expect(result.error).toContain('bold question text');
-	});
-
-	it('rejects missing answer callouts when answers enabled', () => {
-		const missingAnswers = '# Quiz\n\n## Problem 1\n**Question?**\n\n## Problem 2\n**Question?**';
-		const result = validateQuizFormat(missingAnswers, 2, true);
-		expect(result.valid).toBe(false);
-		expect(result.error).toContain('answer callouts');
-	});
-
-	it('rejects separate Answer Key section', () => {
-		const withAnswerKey = validQuizWithAnswers + '\n\n## Answer Key\n1. Answer';
-		const result = validateQuizFormat(withAnswerKey, 2, true);
-		expect(result.valid).toBe(false);
-		expect(result.error).toContain('Answer Key section');
-	});
-
-	it('rejects lowercase "answer key"', () => {
-		const withAnswerKey = validQuizWithAnswers + '\n\n## answer key\n1. Answer';
-		const result = validateQuizFormat(withAnswerKey, 2, true);
-		expect(result.valid).toBe(false);
-	});
-
-	it('rejects uppercase "ANSWER KEY"', () => {
-		const withAnswerKey = validQuizWithAnswers + '\n\n## ANSWER KEY\n1. Answer';
-		const result = validateQuizFormat(withAnswerKey, 2, true);
-		expect(result.valid).toBe(false);
+	it('returns null for bare JSON followed by prose', () => {
+		// Without fences the parser cannot locate the payload, so prose breaks it.
+		expect(parseQuizJson(payload + '\nEnjoy your quiz!')).toBeNull();
 	});
 });
 
-describe('Quiz format - edge cases', () => {
-	it('handles extra whitespace', () => {
-		const withWhitespace = '\n\n# Quiz\n\n## Problem 1\n**Question?**\n\n> [!answer]- ✅ Answer\n> Answer.\n\n';
-		const result = validateQuizFormat(withWhitespace, 1, true);
-		expect(result.valid).toBe(true);
+describe('validateQuizData', () => {
+	it('accepts a structurally valid quiz with answers', () => {
+		const data = { questions: [shortAnswer(), multipleChoice()] };
+		expect(validateQuizData(data, 2, 'mixed', true)).toEqual({ valid: true });
 	});
 
-	it('requires exact answer callout format', () => {
-		// Missing dash
-		const wrongFormat = '# Quiz\n\n## Problem 1\n**Question?**\n\n> [!answer] ✅ Answer\n> Answer.';
-		const result = validateQuizFormat(wrongFormat, 1, true);
+	it('rejects a quiz whose count differs from the request', () => {
+		const data = { questions: [shortAnswer(), shortAnswer()] };
+		const result = validateQuizData(data, 5, 'short-answer', false);
 		expect(result.valid).toBe(false);
+		expect(result.error).toContain('Expected 5 questions, got 2');
 	});
 
-	it('handles case variations in Answer Key check', () => {
-		// "Answer Key" (exact match) should be caught
-		const exactMatch = '# Quiz\n\n## Problem 1\n**Question?**\n\n> [!answer]- ✅ Answer\n> Answer.\n\n## Answer Key\nShould not exist.';
-		const result1 = validateQuizFormat(exactMatch, 1, true);
-		expect(result1.valid).toBe(false);
+	it('rejects a question with empty or missing question text', () => {
+		expect(validateQuizData({ questions: [shortAnswer({ question: '' })] }, 1, 'short-answer', false).error)
+			.toBe('Question 1 missing question text');
+		expect(validateQuizData({ questions: [shortAnswer({ question: '   ' })] }, 1, 'short-answer', false).error)
+			.toBe('Question 1 missing question text');
+	});
 
-		// "answer key" (lowercase) should be caught
-		const lowercase = '# Quiz\n\n## Problem 1\n**Question?**\n\n> [!answer]- ✅ Answer\n> Answer.\n\n## answer key\nShould not exist.';
-		const result2 = validateQuizFormat(lowercase, 1, true);
-		expect(result2.valid).toBe(false);
+	it('rejects an unrecognized question type', () => {
+		const data = { questions: [shortAnswer({ type: 'matching' })] };
+		const result = validateQuizData(data, 1, 'short-answer', false);
+		expect(result.valid).toBe(false);
+		expect(result.error).toContain('Question 1 has invalid type');
+	});
 
-		// "ANSWER KEY" (uppercase) should be caught
-		const uppercase = '# Quiz\n\n## Problem 1\n**Question?**\n\n> [!answer]- ✅ Answer\n> Answer.\n\n## ANSWER KEY\nShould not exist.';
-		const result3 = validateQuizFormat(uppercase, 1, true);
-		expect(result3.valid).toBe(false);
+	it('requires exactly 4 options for multiple-choice', () => {
+		const three = multipleChoice({ options: ['A. x', 'B. y', 'C. z'] });
+		const five = multipleChoice({ options: ['A. w', 'B. x', 'C. y', 'D. z', 'E. v'] });
+		expect(validateQuizData({ questions: [three] }, 1, 'multiple-choice', false).error)
+			.toBe('Question 1 (multiple-choice) must have exactly 4 options');
+		expect(validateQuizData({ questions: [five] }, 1, 'multiple-choice', false).error)
+			.toBe('Question 1 (multiple-choice) must have exactly 4 options');
+	});
+
+	it('requires correctIndex within 0-3 for multiple-choice', () => {
+		const low = multipleChoice({ correctIndex: -1 });
+		const high = multipleChoice({ correctIndex: 4 });
+		expect(validateQuizData({ questions: [low] }, 1, 'multiple-choice', false).error)
+			.toBe('Question 1 (multiple-choice) must have correctIndex 0-3');
+		expect(validateQuizData({ questions: [high] }, 1, 'multiple-choice', false).error)
+			.toBe('Question 1 (multiple-choice) must have correctIndex 0-3');
+	});
+
+	it('requires answers when includeAnswers is true', () => {
+		const noAnswer = shortAnswer({ answer: undefined });
+		expect(validateQuizData({ questions: [noAnswer] }, 1, 'short-answer', true).error)
+			.toBe('Question 1 missing answer');
+	});
+
+	it('requires explanations when includeAnswers is true', () => {
+		const noExplanation = shortAnswer({ explanation: undefined });
+		expect(validateQuizData({ questions: [noExplanation] }, 1, 'short-answer', true).error)
+			.toBe('Question 1 missing explanation');
+	});
+
+	it('does not require answers when includeAnswers is false', () => {
+		const bare = shortAnswer({ answer: undefined, explanation: undefined });
+		expect(validateQuizData({ questions: [bare] }, 1, 'short-answer', false)).toEqual({ valid: true });
+	});
+
+	it('rejects a mixed quiz with fewer than 3 distinct types', () => {
+		const data = {
+			questions: [
+				shortAnswer(),
+				shortAnswer(),
+				trueFalse(),
+				trueFalse(),
+			],
+		};
+		const result = validateQuizData(data, 4, 'mixed', false);
+		expect(result.valid).toBe(false);
+		expect(result.error).toContain('variety');
+	});
+
+	it('accepts a valid mixed quiz spanning all five types', () => {
+		const data = {
+			questions: [
+				shortAnswer(),
+				multipleChoice(),
+				trueFalse(),
+				{ type: 'explain' as const, question: 'Why is binary search logarithmic?', answer: 'Halving steps.', explanation: 'log₂(n) halvings.' },
+				{ type: 'application' as const, question: 'How many probes in 1024 items?', answer: 'Ten.', explanation: 'log₂(1024) = 10.' },
+			],
+		};
+		expect(validateQuizData(data, 5, 'mixed', true)).toEqual({ valid: true });
 	});
 });
 
-describe('Quiz format - mixed distribution validation', () => {
-	it('rejects homogeneous mixed quiz when all same type', () => {
-		// This test documents the expected behavior - the validation
-		// currently doesn't enforce mixed distribution, but this is
-		// documented as a desired enhancement
-		const homogeneousQuiz = `# Quiz
+describe('renderQuizMarkdown', () => {
+	it('renders one numbered heading with a bold question per problem', () => {
+		const markdown = renderQuizMarkdown({ questions: [multipleChoice(), trueFalse()] }, false);
+		expect(markdown).toContain('## Problem 1\n');
+		expect(markdown).toContain('## Problem 2\n');
+		expect(markdown).toContain('**What does binary search require?**');
+		expect(markdown).toContain('**Binary search needs sorted input.**');
+	});
 
-## Problem 1
-**What is A?**
+	it('lists lettered A-D options for multiple-choice only', () => {
+		const mc = renderQuizMarkdown({ questions: [multipleChoice()] }, false);
+		expect(mc).toContain('- A. Sorted input\n');
+		expect(mc).toContain('- B. Hash table\n');
+		expect(mc).toContain('- C. Linked list\n');
+		expect(mc).toContain('- D. Random access only\n');
 
-> [!answer]- ✅ Answer
-> Answer 1.
+		const tf = renderQuizMarkdown({ questions: [trueFalse()] }, false);
+		expect(tf).not.toContain('- A.');
+	});
 
-## Problem 2
-**What is B?**
+	it('bolds the correct letter and option in the answer callout', () => {
+		const markdown = renderQuizMarkdown(
+			{ questions: [multipleChoice({ correctIndex: 1 })] },
+			true,
+		);
+		expect(markdown).toContain('> [!answer]- ✅ Answer\n');
+		expect(markdown).toContain('> **B. Hash table**\n');
+	});
 
-> [!answer]- ✅ Answer
-> Answer 2.`;
+	it('renders non-multiple-choice answers as plain quoted text', () => {
+		const markdown = renderQuizMarkdown({ questions: [trueFalse()] }, true);
+		expect(markdown).toContain('> [!answer]- ✅ Answer\n');
+		expect(markdown).toContain('> True.\n');
+		expect(markdown).not.toContain('> **');
+	});
 
-		const result = validateQuizFormat(homogeneousQuiz, 2, true);
-		// Current validation accepts this, but mixed type should ideally
-		// enforce diversity. This test documents current behavior.
-		expect(result.valid).toBe(true);
+	it('includes the explanation line when present', () => {
+		const markdown = renderQuizMarkdown({ questions: [trueFalse()] }, true);
+		expect(markdown).toContain('> Ordering is what makes half-range discarding safe.\n');
+	});
+
+	it('omits answers entirely when includeAnswers is false', () => {
+		const markdown = renderQuizMarkdown({ questions: [multipleChoice(), trueFalse()] }, false);
+		expect(markdown).not.toContain('[!answer]');
+		expect(markdown).not.toContain('half-range discarding safe');
+	});
+});
+
+describe('buildQuizUserPrompt', () => {
+	const contextBlock = 'CONTEXT NOTES:\n- Binary search halves the search range each step.';
+	const input = {
+		contextBlock,
+		questionCount: 5,
+		type: 'multiple-choice' as const,
+		difficulty: 'hard' as const,
+		includeAnswerKey: true,
+	};
+
+	it('embeds the context block verbatim at the start', () => {
+		const prompt = buildQuizUserPrompt(input);
+		expect(prompt.startsWith(contextBlock)).toBe(true);
+		expect(prompt).toContain(contextBlock);
+	});
+
+	it('states the exact question count and the strict JSON contract', () => {
+		const prompt = buildQuizUserPrompt(input);
+		expect(prompt).toContain('Output EXACTLY 5 questions');
+		expect(prompt).toContain('strict JSON only, no code fences, no extra text');
+		expect(prompt).toContain('"questions"');
+		expect(prompt).toContain('Ground every question in the provided context');
+	});
+
+	it('embeds the type, difficulty, and answer-key instructions', () => {
+		const withKey = buildQuizUserPrompt(input);
+		expect(withKey).toContain(getTypeInstruction('multiple-choice'));
+		expect(withKey).toContain(getDifficultyInstruction('hard'));
+		expect(withKey).toContain('include an "answer" field');
+
+		const withoutKey = buildQuizUserPrompt({ ...input, includeAnswerKey: false });
+		expect(withoutKey).toContain('Set "answer" and "explanation" to null.');
+		expect(withoutKey).not.toContain('include an "answer" field');
+	});
+});
+
+describe('quiz prompt instruction fragments', () => {
+	it('covers every difficulty branch', () => {
+		expect(getDifficultyInstruction('easy')).toContain('foundational');
+		expect(getDifficultyInstruction('medium')).toContain('application, or connecting concepts');
+		expect(getDifficultyInstruction('hard')).toContain('synthesis, analysis');
+		expect(getDifficultyInstruction('mixed')).toContain('vary between easy, medium, and hard');
+	});
+
+	it('covers every type branch', () => {
+		expect(getTypeInstruction('short-answer')).toContain('Short answer — open-ended');
+		expect(getTypeInstruction('multiple-choice')).toContain('labeled A, B, C, D');
+		expect(getTypeInstruction('true-false')).toContain('True / False');
+		expect(getTypeInstruction('explain')).toContain('"why" or "how"');
+		expect(getTypeInstruction('application')).toContain('concrete scenario');
+		expect(getTypeInstruction('mixed')).toContain('across all 5 types');
 	});
 });

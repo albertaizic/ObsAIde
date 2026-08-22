@@ -1,543 +1,344 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { PROVIDER_IDS, type ProviderId } from '../providers/types';
+import {
+	BUILTIN_PROFILE_IDS,
+	BUILTIN_PROFILES,
+	DEFAULT_PROFILE_ID,
+	ProfileRegistry,
+	createCustomProfile,
+	getBuiltinProfile,
+	isBuiltinProfile,
+	migrateTutorMode,
+	resolveEffectiveSettings,
+} from './profiles';
+import type { AssistantProfile, ObsAideSettings, ProviderSettings } from './types';
 
-describe('Assistant Profiles - logic concepts', () => {
-	describe('Profile type', () => {
-		interface AssistantProfile {
-			id: string;
-			name: string;
-			icon: string;
-			instructions: string;
-			providerId?: string;
-			model?: string;
-			responseLength: 'short' | 'normal' | 'detailed';
-			enabled: boolean;
-			isBuiltIn: boolean;
-			contextScope?: string;
-		}
+function customFixture(id: string, overrides: Partial<AssistantProfile> = {}): AssistantProfile {
+	return {
+		id,
+		name: id,
+		icon: 'zap',
+		instructions: `instructions for ${id}`,
+		enabled: true,
+		isBuiltIn: false,
+		...overrides,
+	};
+}
 
-		it('defines required fields', () => {
-			const profile: AssistantProfile = {
-				id: 'test-profile',
-				name: 'Test Profile',
-				icon: 'zap',
-				instructions: 'Be helpful',
-				responseLength: 'normal',
-				enabled: true,
-				isBuiltIn: false,
-			};
+interface SettingsHolder {
+	profiles: AssistantProfile[];
+	activeProfileId?: string;
+}
 
-			expect(profile.id).toBe('test-profile');
-			expect(profile.name).toBe('Test Profile');
-			expect(profile.icon).toBe('zap');
-			expect(profile.instructions).toBe('Be helpful');
-			expect(profile.responseLength).toBe('normal');
+function makeHolder(profiles: AssistantProfile[] = [], activeProfileId?: string): SettingsHolder {
+	return { profiles, activeProfileId };
+}
+
+function makeRegistry(holder: SettingsHolder) {
+	const save = vi.fn(async () => {});
+	const registry = new ProfileRegistry(() => holder, save);
+	return { registry, holder, save };
+}
+
+function providerEntry(model: string): ProviderSettings {
+	return { enabled: true, apiKey: '', baseUrl: '', model };
+}
+
+function globalDefaults(): Pick<ObsAideSettings, 'defaultProvider' | 'providers' | 'responseLength'> {
+	const providers = {} as Record<ProviderId, ProviderSettings>;
+	for (const id of PROVIDER_IDS) {
+		providers[id] = providerEntry(`model-for-${id}`);
+	}
+	return { defaultProvider: 'openrouter', providers, responseLength: 'normal' };
+}
+
+describe('built-in profiles', () => {
+	it('ships exactly the five stable profiles in order', () => {
+		const ids = BUILTIN_PROFILES.map((p) => p.id);
+		expect(ids).toEqual(['general', 'tutor', 'writer', 'coding-assistant', 'researcher']);
+		expect([...BUILTIN_PROFILE_IDS]).toEqual(ids);
+	});
+
+	it('are all enabled, flagged built-in, and uniquely identified', () => {
+		const ids = BUILTIN_PROFILES.map((p) => p.id);
+		expect(new Set(ids).size).toBe(ids.length);
+		for (const profile of BUILTIN_PROFILES) {
 			expect(profile.enabled).toBe(true);
-			expect(profile.isBuiltIn).toBe(false);
+			expect(profile.isBuiltIn).toBe(true);
+		}
+	});
+
+	it('all carry non-empty instructions', () => {
+		for (const profile of BUILTIN_PROFILES) {
+			expect(profile.instructions.trim().length).toBeGreaterThan(0);
+		}
+	});
+
+	it('tutor ships a note context scope and detailed responses', () => {
+		const tutor = BUILTIN_PROFILES.find((p) => p.id === 'tutor');
+		expect(tutor?.contextScope).toBe('note');
+		expect(tutor?.responseLength).toBe('detailed');
+	});
+});
+
+describe('builtin lookups', () => {
+	it('finds a built-in profile by id, and general is the default', () => {
+		expect(getBuiltinProfile('researcher')?.name).toBe('Researcher');
+		expect(DEFAULT_PROFILE_ID).toBe('general');
+		expect(getBuiltinProfile(DEFAULT_PROFILE_ID)?.id).toBe('general');
+	});
+
+	it('returns undefined for unknown or custom ids and classifies them as non-builtin', () => {
+		expect(getBuiltinProfile('custom-123')).toBeUndefined();
+		expect(getBuiltinProfile('nonexistent')).toBeUndefined();
+		expect(isBuiltinProfile('general')).toBe(true);
+		expect(isBuiltinProfile('coding-assistant')).toBe(true);
+		expect(isBuiltinProfile('custom-123')).toBe(false);
+	});
+});
+
+describe('createCustomProfile', () => {
+	it('trims name, icon and instructions', () => {
+		const profile = createCustomProfile({
+			name: '  Padded Name  ',
+			icon: ' sparkles ',
+			instructions: '  Be brief \n',
 		});
+		expect(profile.name).toBe('Padded Name');
+		expect(profile.icon).toBe('sparkles');
+		expect(profile.instructions).toBe('Be brief');
+	});
 
-		it('supports optional provider/model override', () => {
-			const profile: AssistantProfile = {
-				id: 'custom-provider',
-				name: 'Custom Provider Profile',
-				icon: 'cpu',
-				instructions: 'Use custom model',
-				providerId: 'openai',
-				model: 'gpt-4',
-				responseLength: 'detailed',
-				enabled: true,
-				isBuiltIn: false,
-			};
+	it('falls back to Custom/zap for blank name/icon', () => {
+		const profile = createCustomProfile({ name: '   ', icon: '', instructions: '' });
+		expect(profile.name).toBe('Custom');
+		expect(profile.icon).toBe('zap');
+		expect(profile.instructions).toBe('');
+	});
 
-			expect(profile.providerId).toBe('openai');
-			expect(profile.model).toBe('gpt-4');
+	it('generates a unique custom-prefixed id and marks the profile editable', () => {
+		const first = createCustomProfile({ name: 'One', icon: 'zap', instructions: 'a' });
+		const second = createCustomProfile({ name: 'Two', icon: 'zap', instructions: 'b' });
+		expect(first.id.startsWith('custom-')).toBe(true);
+		expect(first.id).not.toBe(second.id);
+		expect(first.enabled).toBe(true);
+		expect(first.isBuiltIn).toBe(false);
+	});
+
+	it('preserves optional provider, model, length and scope overrides', () => {
+		const profile = createCustomProfile({
+			name: 'Picky',
+			icon: 'cpu',
+			instructions: 'Use Anthropic',
+			providerId: 'anthropic',
+			model: 'claude-sonnet',
+			responseLength: 'short',
+			contextScope: 'folder',
 		});
+		expect(profile.providerId).toBe('anthropic');
+		expect(profile.model).toBe('claude-sonnet');
+		expect(profile.responseLength).toBe('short');
+		expect(profile.contextScope).toBe('folder');
+	});
 
-		it('supports optional context scope default', () => {
-			const profile: AssistantProfile = {
-				id: 'tutor-profile',
-				name: 'Tutor',
-				icon: 'graduation-cap',
-				instructions: 'Teach step by step',
-				responseLength: 'detailed',
-				enabled: true,
-				isBuiltIn: true,
-				contextScope: 'note',
-			};
+	it('leaves unset overrides undefined so persistence omits them', () => {
+		const profile = createCustomProfile({ name: 'Bare', icon: 'zap', instructions: 'plain' });
+		expect(profile.providerId).toBeUndefined();
+		expect(profile.model).toBeUndefined();
+		expect(profile.responseLength).toBeUndefined();
+		expect(profile.contextScope).toBeUndefined();
+		expect(JSON.parse(JSON.stringify(profile))).not.toHaveProperty('providerId');
+	});
+});
 
-			expect(profile.contextScope).toBe('note');
+describe('ProfileRegistry reads', () => {
+	it('getAll lists built-ins first, then customs', () => {
+		const { registry } = makeRegistry(makeHolder([customFixture('custom-1')]));
+		expect(registry.getAll().map((p) => p.id)).toEqual([...BUILTIN_PROFILE_IDS, 'custom-1']);
+	});
+
+	it('getEnabled drops disabled customs but keeps built-ins', () => {
+		const { registry } = makeRegistry(
+			makeHolder([
+				customFixture('custom-on'),
+				customFixture('custom-off', { enabled: false }),
+			]),
+		);
+		const enabledIds = registry.getEnabled().map((p) => p.id);
+		expect(enabledIds).toContain('tutor');
+		expect(enabledIds).toContain('custom-on');
+		expect(enabledIds).not.toContain('custom-off');
+	});
+
+	it('get resolves built-ins and customs alike', () => {
+		const { registry } = makeRegistry(makeHolder([customFixture('custom-1', { name: 'Mine' })]));
+		expect(registry.get('writer')).toBeDefined();
+		expect(registry.get('custom-1')?.name).toBe('Mine');
+		expect(registry.get('ghost')).toBeUndefined();
+	});
+
+	it('getActive honours the stored id and falls back to the default', () => {
+		const unset = makeRegistry(makeHolder([customFixture('custom-1')]));
+		expect(unset.registry.getActive()?.id).toBe('general');
+
+		const dangling = makeRegistry(makeHolder([], 'gone'));
+		expect(dangling.registry.getActive()?.id).toBe('general');
+
+		const picked = makeRegistry(makeHolder([customFixture('custom-1')], 'custom-1'));
+		expect(picked.registry.getActive()?.id).toBe('custom-1');
+	});
+});
+
+describe('ProfileRegistry mutations', () => {
+	it('add appends a custom profile and persists', () => {
+		const { registry, holder, save } = makeRegistry(makeHolder());
+		const profile = customFixture('custom-new', { name: 'Fresh' });
+		void registry.add(profile);
+		expect(holder.profiles).toEqual([profile]);
+		expect(save).toHaveBeenCalledTimes(1);
+	});
+
+	it('update merges changes while pinning id and isBuiltIn', async () => {
+		const { registry, holder, save } = makeRegistry(makeHolder([customFixture('custom-1')]));
+		await registry.update('custom-1', { name: 'Renamed', id: 'hijacked', isBuiltIn: true });
+		expect(holder.profiles[0]).toMatchObject({ id: 'custom-1', name: 'Renamed', isBuiltIn: false });
+		expect(save).toHaveBeenCalledTimes(1);
+	});
+
+	it('update throws for missing and built-in profiles', async () => {
+		const { registry } = makeRegistry(makeHolder([customFixture('custom-1')]));
+		await expect(registry.update('ghost', { name: 'X' })).rejects.toThrow('not found');
+		await expect(registry.update('general', { name: 'X' })).rejects.toThrow();
+	});
+
+	it('delete removes a custom profile, persists, and leaves other actives alone', async () => {
+		const { registry, holder, save } = makeRegistry(
+			makeHolder([customFixture('custom-a'), customFixture('custom-b')], 'custom-b'),
+		);
+		await registry.delete('custom-a');
+		expect(holder.profiles.map((p) => p.id)).toEqual(['custom-b']);
+		expect(holder.activeProfileId).toBe('custom-b');
+		expect(save).toHaveBeenCalledTimes(1);
+	});
+
+	it('delete refuses built-in profiles', async () => {
+		const { registry } = makeRegistry(makeHolder());
+		await expect(registry.delete('tutor')).rejects.toThrow();
+	});
+
+	it('delete resets activeProfileId to the default when the active profile was deleted', async () => {
+		const { registry, holder } = makeRegistry(makeHolder([customFixture('custom-a')], 'custom-a'));
+		await registry.delete('custom-a');
+		expect(holder.activeProfileId).toBe(DEFAULT_PROFILE_ID);
+	});
+
+	it('setActive persists the chosen profile id', async () => {
+		const { registry, holder, save } = makeRegistry(makeHolder());
+		await registry.setActive('tutor');
+		expect(holder.activeProfileId).toBe('tutor');
+		expect(save).toHaveBeenCalledTimes(1);
+	});
+
+	it('setActive throws for missing or disabled profiles', async () => {
+		const { registry } = makeRegistry(
+			makeHolder([customFixture('custom-off', { enabled: false })]),
+		);
+		await expect(registry.setActive('custom-off')).rejects.toThrow('disabled');
+		await expect(registry.setActive('ghost')).rejects.toThrow();
+	});
+
+	it('duplicate copies the source into a new enabled custom profile and stores it', async () => {
+		const { registry, holder, save } = makeRegistry(
+			makeHolder([
+				customFixture('custom-src', {
+					name: 'Sourcery',
+					icon: 'target',
+					instructions: 'be sour',
+					providerId: 'anthropic',
+					model: 'claude-sonnet',
+					responseLength: 'short',
+					contextScope: 'folder',
+				}),
+			]),
+		);
+		const copy = await registry.duplicate('custom-src');
+		expect(copy.name).toBe('Sourcery (copy)');
+		expect(copy.icon).toBe('target');
+		expect(copy.instructions).toBe('be sour');
+		expect(copy.providerId).toBe('anthropic');
+		expect(copy.model).toBe('claude-sonnet');
+		expect(copy.responseLength).toBe('short');
+		expect(copy.contextScope).toBe('folder');
+		expect(copy.enabled).toBe(true);
+		expect(copy.isBuiltIn).toBe(false);
+		expect(copy.id.startsWith('custom-')).toBe(true);
+		expect(copy.id).not.toBe('custom-src');
+		expect(holder.profiles.at(-1)).toBe(copy);
+		expect(save).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('resolveEffectiveSettings', () => {
+	it('lets profile overrides win over the globals', () => {
+		const effective = resolveEffectiveSettings(
+			{
+				...customFixture('custom-1'),
+				providerId: 'anthropic',
+				model: 'claude-sonnet',
+				responseLength: 'short',
+			},
+			globalDefaults(),
+		);
+		expect(effective).toEqual({
+			providerId: 'anthropic',
+			model: 'claude-sonnet',
+			responseLength: 'short',
 		});
 	});
 
-	describe('Built-in profiles', () => {
-		function getBuiltInProfiles(): AssistantProfile[] {
-			return [
-				{
-					id: 'general',
-					name: 'General',
-					icon: 'message-square',
-					instructions: 'You are a helpful, balanced assistant.',
-					responseLength: 'normal',
-					enabled: true,
-					isBuiltIn: true,
-				},
-				{
-					id: 'tutor',
-					name: 'Tutor',
-					icon: 'graduation-cap',
-					instructions: 'You are a patient tutor. Teach step by step, use examples, check understanding.',
-					responseLength: 'detailed',
-					enabled: true,
-					isBuiltIn: true,
-					contextScope: 'note',
-				},
-				{
-					id: 'writer',
-					name: 'Writer',
-					icon: 'pen-tool',
-					instructions: 'You are a writing assistant. Produce clear, well-structured, note-ready prose.',
-					responseLength: 'normal',
-					enabled: true,
-					isBuiltIn: true,
-				},
-				{
-					id: 'coding-assistant',
-					name: 'Coding Assistant',
-					icon: 'code',
-					instructions: 'You are a coding expert. Provide precise, technical answers with code examples.',
-					responseLength: 'normal',
-					enabled: true,
-					isBuiltIn: true,
-				},
-				{
-					id: 'researcher',
-					name: 'Researcher',
-					icon: 'search',
-					instructions: 'You are a research assistant. Analyze evidence, distinguish inference from fact, identify gaps.',
-					responseLength: 'detailed',
-					enabled: true,
-					isBuiltIn: true,
-				},
-			];
-		}
-
-		it('provides 5 built-in profiles', () => {
-			const profiles = getBuiltInProfiles();
-			expect(profiles).toHaveLength(5);
-		});
-
-		it('includes General profile', () => {
-			const profiles = getBuiltInProfiles();
-			const general = profiles.find(p => p.id === 'general');
-			expect(general).toBeDefined();
-			expect(general?.name).toBe('General');
-		});
-
-		it('includes Tutor profile', () => {
-			const profiles = getBuiltInProfiles();
-			const tutor = profiles.find(p => p.id === 'tutor');
-			expect(tutor).toBeDefined();
-			expect(tutor?.name).toBe('Tutor');
-			expect(tutor?.icon).toBe('graduation-cap');
-		});
-
-		it('includes Writer profile', () => {
-			const profiles = getBuiltInProfiles();
-			const writer = profiles.find(p => p.id === 'writer');
-			expect(writer).toBeDefined();
-			expect(writer?.name).toBe('Writer');
-		});
-
-		it('includes Coding Assistant profile', () => {
-			const profiles = getBuiltInProfiles();
-			const coder = profiles.find(p => p.id === 'coding-assistant');
-			expect(coder).toBeDefined();
-			expect(coder?.name).toBe('Coding Assistant');
-		});
-
-		it('includes Researcher profile', () => {
-			const profiles = getBuiltInProfiles();
-			const researcher = profiles.find(p => p.id === 'researcher');
-			expect(researcher).toBeDefined();
-			expect(researcher?.name).toBe('Researcher');
-		});
-
-		it('all built-in profiles have stable IDs', () => {
-			const profiles = getBuiltInProfiles();
-			const ids = profiles.map(p => p.id);
-			expect(ids).toEqual(['general', 'tutor', 'writer', 'coding-assistant', 'researcher']);
-		});
-
-		it('all built-in profiles are enabled by default', () => {
-			const profiles = getBuiltInProfiles();
-			expect(profiles.every(p => p.enabled)).toBe(true);
-		});
-
-		it('all built-in profiles have isBuiltIn=true', () => {
-			const profiles = getBuiltInProfiles();
-			expect(profiles.every(p => p.isBuiltIn)).toBe(true);
-		});
+	it('falls back to the pinned provider model when the profile model is blank', () => {
+		const globals = globalDefaults();
+		const blank = resolveEffectiveSettings(
+			{ ...customFixture('custom-1'), providerId: 'anthropic', model: '' },
+			globals,
+		);
+		const whitespace = resolveEffectiveSettings(
+			{ ...customFixture('custom-2'), providerId: 'anthropic', model: '   ' },
+			globals,
+		);
+		expect(blank.model).toBe(globals.providers['anthropic'].model);
+		expect(whitespace.model).toBe(globals.providers['anthropic'].model);
 	});
 
-	describe('Custom profile management', () => {
-		interface AssistantProfile {
-			id: string;
-			name: string;
-			icon: string;
-			instructions: string;
-			providerId?: string;
-			model?: string;
-			responseLength: 'short' | 'normal' | 'detailed';
-			enabled: boolean;
-			isBuiltIn: boolean;
-			contextScope?: string;
-		}
-
-		function createCustomProfile(data: Partial<AssistantProfile>): AssistantProfile {
-			return {
-				id: `custom-${Date.now()}`,
-				name: data.name ?? 'Custom',
-				icon: data.icon ?? 'zap',
-				instructions: data.instructions ?? '',
-				providerId: data.providerId,
-				model: data.model,
-				responseLength: data.responseLength ?? 'normal',
-				enabled: data.enabled ?? true,
-				isBuiltIn: false,
-				contextScope: data.contextScope,
-			};
-		}
-
-		it('creates custom profile with unique ID', () => {
-			let counter = 0;
-			const createWithCounter = (data: Partial<AssistantProfile>): AssistantProfile => ({
-				...data,
-				id: `custom-${++counter}`,
-				name: data.name ?? 'Custom',
-				icon: data.icon ?? 'zap',
-				instructions: data.instructions ?? '',
-				providerId: data.providerId,
-				model: data.model,
-				responseLength: data.responseLength ?? 'normal',
-				enabled: data.enabled ?? true,
-				isBuiltIn: false,
-				contextScope: data.contextScope,
-			}) as AssistantProfile;
-
-			const p1 = createWithCounter({ name: 'Profile 1' });
-			const p2 = createWithCounter({ name: 'Profile 2' });
-			expect(p1.id).not.toBe(p2.id);
-			expect(p1.isBuiltIn).toBe(false);
-			expect(p2.isBuiltIn).toBe(false);
-		});
-
-		it('allows renaming custom profile', () => {
-			const profile = createCustomProfile({ name: 'Old Name' });
-			profile.name = 'New Name';
-			expect(profile.name).toBe('New Name');
-		});
-
-		it('allows changing instructions', () => {
-			const profile = createCustomProfile({ instructions: 'Old instructions' });
-			profile.instructions = 'New instructions';
-			expect(profile.instructions).toBe('New instructions');
-		});
-
-		it('allows changing provider/model', () => {
-			const profile = createCustomProfile({ providerId: 'openai', model: 'gpt-3.5' });
-			profile.providerId = 'anthropic';
-			profile.model = 'claude-3';
-			expect(profile.providerId).toBe('anthropic');
-			expect(profile.model).toBe('claude-3');
-		});
-
-		it('allows disabling/enabling', () => {
-			const profile = createCustomProfile({ enabled: true });
-			profile.enabled = false;
-			expect(profile.enabled).toBe(false);
-			profile.enabled = true;
-			expect(profile.enabled).toBe(true);
-		});
-
-		it('built-in profiles cannot be deleted', () => {
-			const profiles: AssistantProfile[] = [
-				{ id: 'general', name: 'General', icon: 'message-square', instructions: '', responseLength: 'normal', enabled: true, isBuiltIn: true },
-				{ id: 'custom-1', name: 'Custom', icon: 'zap', instructions: '', responseLength: 'normal', enabled: true, isBuiltIn: false },
-			];
-
-			const canDelete = (id: string) => {
-				const profile = profiles.find(p => p.id === id);
-				return profile && !profile.isBuiltIn;
-			};
-
-			expect(canDelete('general')).toBe(false);
-			expect(canDelete('custom-1')).toBe(true);
-		});
+	it('fills only the gaps a profile leaves unset', () => {
+		const effective = resolveEffectiveSettings(
+			{ ...customFixture('custom-1'), providerId: 'gemini' },
+			globalDefaults(),
+		);
+		expect(effective.providerId).toBe('gemini');
+		expect(effective.model).toBe(globalDefaults().providers['gemini'].model);
+		expect(effective.responseLength).toBe('normal');
 	});
 
-	describe('Profile selector', () => {
-		type ProfileId = string;
-
-		function getActiveProfileId(profiles: AssistantProfile[], defaultId: ProfileId): ProfileId {
-			const active = profiles.find(p => p.enabled && p.id === defaultId);
-			return active?.id ?? defaultId;
-		}
-
-		interface AssistantProfile {
-			id: string;
-			name: string;
-			icon: string;
-			instructions: string;
-			providerId?: string;
-			model?: string;
-			responseLength: 'short' | 'normal' | 'detailed';
-			enabled: boolean;
-			isBuiltIn: boolean;
-			contextScope?: string;
-		}
-
-		it('returns current profile ID', () => {
-			const profiles: AssistantProfile[] = [
-				{ id: 'general', name: 'General', icon: 'message-square', instructions: '', responseLength: 'normal', enabled: true, isBuiltIn: true },
-				{ id: 'tutor', name: 'Tutor', icon: 'graduation-cap', instructions: '', responseLength: 'detailed', enabled: true, isBuiltIn: true },
-			];
-			expect(getActiveProfileId(profiles, 'tutor')).toBe('tutor');
-		});
-
-		it('falls back to general if current disabled', () => {
-			const profiles: AssistantProfile[] = [
-				{ id: 'general', name: 'General', icon: 'message-square', instructions: '', responseLength: 'normal', enabled: true, isBuiltIn: true },
-				{ id: 'tutor', name: 'Tutor', icon: 'graduation-cap', instructions: '', responseLength: 'detailed', enabled: false, isBuiltIn: true },
-			];
-			expect(getActiveProfileId(profiles, 'tutor')).toBe('tutor'); // Still returns the requested one
+	it('uses global defaults entirely for an undefined profile', () => {
+		expect(resolveEffectiveSettings(undefined, globalDefaults())).toEqual({
+			providerId: 'openrouter',
+			model: 'model-for-openrouter',
+			responseLength: 'normal',
 		});
 	});
+});
 
-	describe('Prompt precedence', () => {
-		function buildPrompt(parts: {
-			base: string;
-			profile?: string;
-			responseLength?: string;
-			actionInstructions?: string;
-			contextInstructions?: string;
-			userRequest: string;
-		}): string {
-			const sections: string[] = [];
-
-			// Base safety/behavior
-			sections.push(parts.base);
-
-			// Profile instructions
-			if (parts.profile) sections.push(parts.profile);
-
-			// Response length
-			if (parts.responseLength) sections.push(parts.responseLength);
-
-			// Action-specific instructions
-			if (parts.actionInstructions) sections.push(parts.actionInstructions);
-
-			// Context instructions
-			if (parts.contextInstructions) sections.push(parts.contextInstructions);
-
-			// User request
-			sections.push(parts.userRequest);
-
-			return sections.join('\n\n');
-		}
-
-		it('orders: base → profile → responseLength → action → context → user', () => {
-			const prompt = buildPrompt({
-				base: 'BASE',
-				profile: 'PROFILE',
-				responseLength: 'LENGTH',
-				actionInstructions: 'ACTION',
-				contextInstructions: 'CONTEXT',
-				userRequest: 'USER',
-			});
-
-			const parts = prompt.split('\n\n');
-			expect(parts[0]).toBe('BASE');
-			expect(parts[1]).toBe('PROFILE');
-			expect(parts[2]).toBe('LENGTH');
-			expect(parts[3]).toBe('ACTION');
-			expect(parts[4]).toBe('CONTEXT');
-			expect(parts[5]).toBe('USER');
-		});
-
-		it('action overrides profile for output format', () => {
-			const profileInstructions = 'Always be detailed and verbose.';
-			const actionInstructions = 'Return exactly one sentence.';
-
-			const prompt = buildPrompt({
-				base: 'BASE',
-				profile: profileInstructions,
-				actionInstructions: actionInstructions,
-				userRequest: 'Question',
-			});
-
-			// Action instructions should appear after profile, so they take precedence
-			const profileIndex = prompt.indexOf(profileInstructions);
-			const actionIndex = prompt.indexOf(actionInstructions);
-			expect(actionIndex).toBeGreaterThan(profileIndex);
-		});
+describe('migrateTutorMode', () => {
+	it('points activeProfileId at tutor when tutor mode was on with no profile yet', () => {
+		expect(migrateTutorMode({ tutorModeByDefault: true })).toEqual({ activeProfileId: 'tutor' });
 	});
 
-	describe('Conversation profile persistence', () => {
-		interface Conversation {
-			id: string;
-			mode: string;
-			activeProfileId?: string;
-			messages: any[];
-		}
-
-		it('stores active profile ID in conversation', () => {
-			const conversation: Conversation = {
-				id: 'conv-1',
-				mode: 'chat',
-				activeProfileId: 'tutor',
-				messages: [],
-			};
-
-			expect(conversation.activeProfileId).toBe('tutor');
-		});
-
-		it('defaults to general profile', () => {
-			const conversation: Conversation = {
-				id: 'conv-2',
-				mode: 'chat',
-				messages: [],
-			};
-
-			expect(conversation.activeProfileId).toBeUndefined();
-		});
-
-		it('switching profile updates conversation', () => {
-			let conversation: Conversation = {
-				id: 'conv-3',
-				mode: 'chat',
-				activeProfileId: 'general',
-				messages: [],
-			};
-
-			conversation = { ...conversation, activeProfileId: 'writer' };
-			expect(conversation.activeProfileId).toBe('writer');
-		});
-
-		it('does not rewrite prior messages on profile switch', () => {
-			const conversation: Conversation = {
-				id: 'conv-4',
-				mode: 'chat',
-				activeProfileId: 'general',
-				messages: [
-					{ role: 'user', text: 'Hello' },
-					{ role: 'assistant', text: 'Hi there' },
-				],
-			};
-
-			const updated = { ...conversation, activeProfileId: 'tutor' };
-			expect(updated.messages.length).toBe(2);
-			expect(updated.messages[0].text).toBe('Hello');
-			expect(updated.activeProfileId).toBe('tutor');
-		});
+	it('leaves settings alone when a profile is already active', () => {
+		expect(migrateTutorMode({ tutorModeByDefault: true, activeProfileId: 'writer' })).toEqual({});
 	});
 
-	describe('Tutor migration', () => {
-		interface ProfileSettings {
-			tutorModeByDefault: boolean;
-			activeProfileId?: string;
-		}
-
-		function migrateTutorMode(settings: ProfileSettings): ProfileSettings {
-			const newSettings = { ...settings };
-
-			// If tutorModeByDefault was true, set active profile to tutor
-			if (settings.tutorModeByDefault && !settings.activeProfileId) {
-				newSettings.activeProfileId = 'tutor';
-			}
-
-			return newSettings;
-		}
-
-		it('migrates tutorModeByDefault to tutor profile', () => {
-			const settings: ProfileSettings = {
-				tutorModeByDefault: true,
-				activeProfileId: undefined,
-			};
-
-			const migrated = migrateTutorMode(settings);
-			expect(migrated.activeProfileId).toBe('tutor');
-		});
-
-		it('does not migrate if already has profile', () => {
-			const settings: ProfileSettings = {
-				tutorModeByDefault: true,
-				activeProfileId: 'writer',
-			};
-
-			const migrated = migrateTutorMode(settings);
-			expect(migrated.activeProfileId).toBe('writer');
-		});
-
-		it('does not migrate if tutorModeByDefault is false', () => {
-			const settings: ProfileSettings = {
-				tutorModeByDefault: false,
-				activeProfileId: undefined,
-			};
-
-			const migrated = migrateTutorMode(settings);
-			expect(migrated.activeProfileId).toBeUndefined();
-		});
-	});
-
-	describe('Profile and Custom Action separation', () => {
-		interface AssistantProfile {
-			id: string;
-			name: string;
-			instructions: string;
-		}
-
-		interface CustomAction {
-			id: string;
-			name: string;
-			instruction: string;
-		}
-
-		it('profiles are persistent behavior', () => {
-			const profile: AssistantProfile = {
-				id: 'tutor',
-				name: 'Tutor',
-				instructions: 'Teach step by step',
-			};
-
-			expect(profile.instructions).toContain('Teach');
-		});
-
-		it('actions are one-time operations', () => {
-			const action: CustomAction = {
-				id: 'flashcards',
-				name: 'Make flashcards',
-				instruction: 'Create flashcards from the text',
-			};
-
-			expect(action.instruction).toContain('flashcards');
-		});
-
-		it('action runs with active profile', () => {
-			const profile: AssistantProfile = {
-				id: 'tutor',
-				name: 'Tutor',
-				instructions: 'Be educational',
-			};
-
-			const action: CustomAction = {
-				id: 'flashcards',
-				name: 'Make flashcards',
-				instruction: 'Create flashcards',
-			};
-
-			// Action uses profile as base behavior
-			const combinedPrompt = `${profile.instructions}\n\n${action.instruction}`;
-			expect(combinedPrompt).toContain('Be educational');
-			expect(combinedPrompt).toContain('Create flashcards');
-		});
+	it('leaves settings alone when tutor mode was off', () => {
+		expect(migrateTutorMode({ tutorModeByDefault: false })).toEqual({});
 	});
 });

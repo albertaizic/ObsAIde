@@ -1,499 +1,416 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import {
+	applyWikilink,
+	discoverCandidates,
+	filterExistingLinks,
+	generateSuggestions,
+	isPositionProtected,
+	isProposalAlreadyLinked,
+	parseWikilinkProposals,
+	type WikilinkCandidate,
+} from './wikilink-suggestions';
 
-describe('Wikilink Suggestions - logic concepts', () => {
-	describe('candidate discovery', () => {
-		interface WikilinkCandidate {
-			path: string;
-			title: string;
-			aliases?: string[];
-			headings?: string[];
-		}
+/** The App parameter of discoverCandidates, without importing 'obsidian'. */
+type FakeApp = Parameters<typeof discoverCandidates>[0];
 
-		const mockVaultFiles: WikilinkCandidate[] = [
-			{ path: 'Time Complexity.md', title: 'Time Complexity', aliases: ['Big O'], headings: ['Overview', 'Common Complexities'] },
-			{ path: 'Linear Search.md', title: 'Linear Search', aliases: [], headings: ['Algorithm', 'Complexity'] },
-			{ path: 'Divide and Conquer.md', title: 'Divide and Conquer', aliases: ['D&C'], headings: ['Strategy', 'Examples'] },
-			{ path: 'Trees.md', title: 'Trees', aliases: [], headings: ['Binary Trees', 'Balanced Trees'] },
-			{ path: 'Algorithms/Binary Search.md', title: 'Binary Search', aliases: [], headings: ['Algorithm', 'Complexity'] },
+interface FakeFile {
+	path: string;
+	basename: string;
+}
+
+function makeApp(files: FakeFile[], contents: Record<string, string>): FakeApp {
+	return {
+		vault: {
+			getMarkdownFiles: () => files,
+			cachedRead: async (file: FakeFile) => {
+				const content = contents[file.path];
+				if (content === undefined) throw new Error('unreadable');
+				return content;
+			},
+		},
+	} as unknown as FakeApp;
+}
+
+function candidate(title: string, extras: Partial<WikilinkCandidate> = {}): WikilinkCandidate {
+	return { path: `notes/${title}.md`, title, aliases: [], headings: [], ...extras };
+}
+
+describe('discoverCandidates', () => {
+	it('extracts frontmatter aliases and headings from candidate notes', async () => {
+		const app = makeApp(
+			[
+				{ path: 'notes/Machine Learning.md', basename: 'Machine Learning' },
+				{ path: 'notes/Zettelkasten.md', basename: 'Zettelkasten' },
+			],
+			{
+				'notes/Machine Learning.md':
+					'---\naliases: [ML, Deep Learning]\n---\n# Overview\n\n## Training Models\n',
+				'notes/Zettelkasten.md': '---\naliases: Slip Box\n---\n',
+			},
+		);
+
+		const candidates = await discoverCandidates(app, 'machine learning slip box overview');
+
+		const ml = candidates.find((c) => c.title === 'Machine Learning');
+		expect(ml?.path).toBe('notes/Machine Learning.md');
+		expect(ml?.aliases).toEqual(['ML', 'Deep Learning']);
+		expect(ml?.headings).toEqual(['Overview', 'Training Models']);
+		expect(candidates.find((c) => c.title === 'Zettelkasten')?.aliases).toEqual(['Slip Box']);
+	});
+
+	it('surfaces notes whose alias overlaps even when the title does not', async () => {
+		const app = makeApp(
+			[{ path: 'notes/Zettelkasten.md', basename: 'Zettelkasten' }],
+			{ 'notes/Zettelkasten.md': '---\naliases: [Slip Box]\n---\n' },
+		);
+
+		const candidates = await discoverCandidates(app, 'the slip box method');
+
+		expect(candidates.map((c) => c.title)).toEqual(['Zettelkasten']);
+	});
+
+	it('surfaces notes whose heading overlaps the source text', async () => {
+		const app = makeApp(
+			[{ path: 'notes/Archive.md', basename: 'Archive' }],
+			{ 'notes/Archive.md': '# Spaced Repetition Schedule\n' },
+		);
+
+		const candidates = await discoverCandidates(app, 'repetition schedule notes');
+
+		expect(candidates.map((c) => c.title)).toEqual(['Archive']);
+	});
+
+	it('ranks exact-ish title matches above partial ones', async () => {
+		const app = makeApp(
+			[
+				{ path: 'notes/Learning.md', basename: 'Learning' },
+				{ path: 'notes/Machine Learning Basics.md', basename: 'Machine Learning Basics' },
+			],
+			{ 'notes/Learning.md': '', 'notes/Machine Learning Basics.md': '' },
+		);
+
+		const candidates = await discoverCandidates(app, 'machine learning basics intro');
+
+		expect(candidates.map((c) => c.title)).toEqual(['Machine Learning Basics', 'Learning']);
+	});
+
+	it('respects maxCandidates', async () => {
+		const files: FakeFile[] = [
+			{ path: 'notes/Alpha Topic.md', basename: 'Alpha Topic' },
+			{ path: 'notes/Beta Topic.md', basename: 'Beta Topic' },
+			{ path: 'notes/Gamma Topic.md', basename: 'Gamma Topic' },
 		];
+		const contents = Object.fromEntries(files.map((f) => [f.path, '']));
+		const candidates = await discoverCandidates(makeApp(files, contents), 'topic notes', {
+			maxCandidates: 2,
+		});
 
-		function discoverCandidates(
-			sourceText: string,
-			allNotes: WikilinkCandidate[],
-			maxCandidates = 20,
-		): WikilinkCandidate[] {
-			const sourceLower = sourceText.toLowerCase();
-			const words = sourceLower.split(/\s+/).filter(w => w.length > 2);
-
-			const scored = allNotes.map(note => {
-				let score = 0;
-				const titleLower = note.title.toLowerCase();
-				const aliasesLower = (note.aliases ?? []).map(a => a.toLowerCase());
-				const headingsLower = (note.headings ?? []).map(h => h.toLowerCase());
-
-				// Title match
-				for (const word of words) {
-					if (titleLower.includes(word)) score += 10;
-				}
-				// Alias match
-				for (const alias of aliasesLower) {
-					for (const word of words) {
-						if (alias.includes(word)) score += 8;
-					}
-				}
-				// Heading match
-				for (const heading of headingsLower) {
-					for (const word of words) {
-						if (heading.includes(word)) score += 5;
-					}
-				}
-				// Phrase match in title
-				const phrase = words.slice(0, 3).join(' ');
-				if (titleLower.includes(phrase)) score += 20;
-
-				return { note, score };
-			});
-
-			return scored
-				.filter(s => s.score > 0)
-				.sort((a, b) => b.score - a.score)
-				.slice(0, maxCandidates)
-				.map(s => s.note);
+		expect(candidates).toHaveLength(2);
+		for (const c of candidates) {
+			expect(['Alpha Topic', 'Beta Topic', 'Gamma Topic']).toContain(c.title);
 		}
-
-		it('discovers candidates from note titles', () => {
-			const source = 'Binary search has logarithmic runtime';
-			const candidates = discoverCandidates(source, mockVaultFiles);
-			expect(candidates.some(c => c.title === 'Binary Search')).toBe(true);
-		});
-
-		it('discovers candidates from aliases', () => {
-			const source = 'Big O notation is important';
-			const candidates = discoverCandidates(source, mockVaultFiles);
-			expect(candidates.some(c => c.title === 'Time Complexity')).toBe(true);
-		});
-
-		it('discovers candidates from headings', () => {
-			const source = 'Binary trees are useful';
-			const candidates = discoverCandidates(source, mockVaultFiles);
-			expect(candidates.some(c => c.title === 'Trees')).toBe(true);
-		});
-
-		it('limits candidates to maxCandidates', () => {
-			const manyNotes = Array.from({ length: 50 }, (_, i) => ({
-				path: `Note ${i}.md`,
-				title: `Note ${i}`,
-				aliases: [],
-				headings: [],
-			}));
-			const source = 'test';
-			const candidates = discoverCandidates(source, manyNotes, 10);
-			expect(candidates.length).toBeLessThanOrEqual(10);
-		});
-
-		it('deduplicates candidates by path', () => {
-			const notesWithDupe = [
-				...mockVaultFiles,
-				{ path: 'Other/Binary Search.md', title: 'Binary Search', aliases: [], headings: [] },
-			];
-			const source = 'binary search';
-			const candidates = discoverCandidates(source, notesWithDupe);
-			// Deduplication should keep only one by path, not title
-			const uniquePaths = new Set(candidates.map(c => c.path));
-			expect(candidates.length).toBe(uniquePaths.size);
-		});
-
-		it('handles ambiguous filenames by path', () => {
-			const candidates = discoverCandidates('binary search', mockVaultFiles);
-			const binarySearch = candidates.find(c => c.title === 'Binary Search');
-			expect(binarySearch).toBeDefined();
-			expect(binarySearch?.path).toBe('Algorithms/Binary Search.md');
-		});
-
-		it('returns empty for no matches', () => {
-			const candidates = discoverCandidates('xyz unknown topic', mockVaultFiles);
-			expect(candidates.length).toBe(0);
-		});
 	});
 
-	describe('suggestion generation', () => {
-		interface WikilinkSuggestion {
-			targetPath: string;
-			targetTitle: string;
-			sourcePhrase: string;
-			confidence: number;
-			reason: string;
-		}
+	it('skips files it cannot read', async () => {
+		const app = makeApp(
+			[
+				{ path: 'notes/Alpha Topic.md', basename: 'Alpha Topic' },
+				{ path: 'notes/Broken Note.md', basename: 'Broken Note' },
+			],
+			{ 'notes/Alpha Topic.md': '' },
+		);
 
-		function generateSuggestions(
-			sourceText: string,
-			candidates: Array<{ path: string; title: string; aliases?: string[] }>,
-			maxSuggestions = 10,
-		): WikilinkSuggestion[] {
-			const suggestions: WikilinkSuggestion[] = [];
+		const candidates = await discoverCandidates(app, 'alpha topic');
 
-			for (const candidate of candidates) {
-				const titleLower = candidate.title.toLowerCase();
-				const aliasesLower = (candidate.aliases ?? []).map(a => a.toLowerCase());
-				const sourceLower = sourceText.toLowerCase();
-
-				// Try to find the best matching phrase in source text
-				let bestPhrase = '';
-				let bestConfidence = 0;
-
-				// Check title match
-				if (sourceLower.includes(titleLower)) {
-					bestPhrase = candidate.title;
-					bestConfidence = 0.9;
-				}
-
-				// Check alias matches
-				for (const alias of aliasesLower) {
-					if (sourceLower.includes(alias) && alias.length > bestPhrase.length) {
-						bestPhrase = alias;
-						bestConfidence = 0.85;
-					}
-				}
-
-				// Check partial word matches
-				if (!bestPhrase) {
-					const words = sourceLower.split(/\s+/).filter(w => w.length > 3);
-					for (const word of words) {
-						if (titleLower.includes(word) && word.length > bestPhrase.length) {
-							bestPhrase = word;
-							bestConfidence = 0.6;
-						}
-					}
-				}
-
-				if (bestPhrase && bestConfidence > 0.3) {
-					suggestions.push({
-						targetPath: candidate.path,
-						targetTitle: candidate.title,
-						sourcePhrase: bestPhrase,
-						confidence: bestConfidence,
-						reason: `Matches "${bestPhrase}" in source text`,
-					});
-				}
-			}
-
-			return suggestions
-				.sort((a, b) => b.confidence - a.confidence)
-				.slice(0, maxSuggestions);
-		}
-
-		it('generates suggestions with source phrase', () => {
-			const source = 'Binary search has logarithmic runtime';
-			const candidates = [{ path: 'Binary Search.md', title: 'Binary Search', aliases: [] }];
-			const suggestions = generateSuggestions(source, candidates);
-			expect(suggestions.length).toBeGreaterThan(0);
-			expect(suggestions[0].sourcePhrase).toBe('Binary Search');
-		});
-
-		it('uses aliases for matching', () => {
-			const source = 'Big O notation is important';
-			const candidates = [{ path: 'Time Complexity.md', title: 'Time Complexity', aliases: ['Big O'] }];
-			const suggestions = generateSuggestions(source, candidates);
-			expect(suggestions.length).toBeGreaterThan(0);
-			// Alias matching returns lowercase version
-			expect(suggestions[0].sourcePhrase.toLowerCase()).toBe('big o');
-		});
-
-		it('includes confidence and reason', () => {
-			const source = 'Binary search is fast';
-			const candidates = [{ path: 'Binary Search.md', title: 'Binary Search', aliases: [] }];
-			const suggestions = generateSuggestions(source, candidates);
-			expect(suggestions[0].confidence).toBeGreaterThan(0);
-			expect(suggestions[0].reason).toContain('Binary Search');
-		});
-
-		it('sorts by confidence', () => {
-			const source = 'Binary search and linear search';
-			const candidates = [
-				{ path: 'Binary Search.md', title: 'Binary Search', aliases: [] },
-				{ path: 'Linear Search.md', title: 'Linear Search', aliases: [] },
-			];
-			const suggestions = generateSuggestions(source, candidates);
-			expect(suggestions[0].confidence).toBeGreaterThanOrEqual(suggestions[1].confidence);
-		});
+		expect(candidates.map((c) => c.title)).toEqual(['Alpha Topic']);
 	});
 
-	describe('application formatting', () => {
-		function applyWikilink(
-			text: string,
-			sourcePhrase: string,
-			targetTitle: string,
-			targetPath: string,
-		): string {
-			// Find the source phrase in text (case-insensitive)
-			const index = text.toLowerCase().indexOf(sourcePhrase.toLowerCase());
-			if (index === -1) return text;
+	it('drops candidates with no textual overlap with the source', async () => {
+		const app = makeApp(
+			[{ path: 'notes/Totally Different.md', basename: 'Totally Different' }],
+			{ 'notes/Totally Different.md': '' },
+		);
 
-			// Use simple wikilink if phrase matches title case-insensitively
-			// This matches the expected behavior in the tests
-			const matchesIgnoreCase = sourcePhrase.toLowerCase() === targetTitle.toLowerCase();
-			const linkText = matchesIgnoreCase
-				? `[[${targetTitle}]]`
-				: `[[${targetTitle}|${sourcePhrase}]]`;
+		const candidates = await discoverCandidates(app, 'unrelated gibberish words');
 
-			return text.slice(0, index) + linkText + text.slice(index + sourcePhrase.length);
-		}
-
-		it('applies simple wikilink when phrase matches title', () => {
-			const text = 'Binary search is fast';
-			const result = applyWikilink(text, 'Binary search', 'Binary Search', 'Binary Search.md');
-			expect(result).toBe('[[Binary Search]] is fast');
-		});
-
-		it('uses alias when phrase differs from title', () => {
-			const text = 'The Big O notation is important';
-			const result = applyWikilink(text, 'Big O', 'Time Complexity', 'Time Complexity.md');
-			expect(result).toBe('The [[Time Complexity|Big O]] notation is important');
-		});
-
-		it('uses simple wikilink when phrase matches title case-insensitively', () => {
-			const text = 'BINARY SEARCH is fast';
-			const result = applyWikilink(text, 'BINARY SEARCH', 'Binary Search', 'Binary Search.md');
-			// Case-insensitive match uses simple wikilink format
-			expect(result).toBe('[[Binary Search]] is fast');
-		});
-
-		it('returns original text if phrase not found', () => {
-			const text = 'Linear search is slow';
-			const result = applyWikilink(text, 'Binary search', 'Binary Search', 'Binary Search.md');
-			expect(result).toBe('Linear search is slow');
-		});
+		expect(candidates).toEqual([]);
 	});
 
-	describe('exclusion rules', () => {
-		function shouldExcludePosition(text: string, index: number): boolean {
-			// Check if inside code block
-			const beforeText = text.slice(0, index);
-			const codeBlockCount = (beforeText.match(/```/g) || []).length;
-			if (codeBlockCount % 2 === 1) return true;
+	it('treats a source of only short words as matching every note (empty phrase quirk)', async () => {
+		const files: FakeFile[] = [
+			{ path: 'notes/Alpha.md', basename: 'Alpha' },
+			{ path: 'notes/Beta.md', basename: 'Beta' },
+		];
+		const contents = Object.fromEntries(files.map((f) => [f.path, '']));
 
-			// Check if inside inline code
-			const inlineCodeCount = (beforeText.match(/`/g) || []).length;
-			if (inlineCodeCount % 2 === 1) return true;
+		const candidates = await discoverCandidates(makeApp(files, contents), 'ab cd');
 
-			// Check if inside frontmatter
-			// Frontmatter is between the first and second --- at the start of the file
-			const firstDelimiter = text.indexOf('---');
-			const secondDelimiter = text.indexOf('---', firstDelimiter + 3);
-			if (firstDelimiter === 0 && secondDelimiter !== -1 && index > firstDelimiter && index < secondDelimiter) {
-				return true;
-			}
-
-			// Check if already inside a wikilink
-			const wikilinkStart = beforeText.lastIndexOf('[[');
-			const wikilinkEnd = beforeText.lastIndexOf(']]');
-			if (wikilinkStart !== -1 && (wikilinkEnd === -1 || wikilinkStart > wikilinkEnd)) {
-				return true;
-			}
-
-			// Check if inside markdown link [text](url)
-			// Search in full text for markdown links and check if index falls within any
-			const linkRegex = /\[([^\]]+)\]\([^)]+\)/g;
-			let match;
-			while ((match = linkRegex.exec(text)) !== null) {
-				const linkStart = match.index;
-				const linkEnd = match.index + match[0].length;
-				if (index >= linkStart && index <= linkEnd) {
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-		it('excludes code blocks', () => {
-			const text = '```\nBinary search\n```';
-			const index = text.indexOf('Binary search');
-			expect(shouldExcludePosition(text, index)).toBe(true);
-		});
-
-		it('excludes inline code', () => {
-			const text = 'Use `binary search` for this';
-			const index = text.indexOf('binary search');
-			expect(shouldExcludePosition(text, index)).toBe(true);
-		});
-
-		it('excludes frontmatter', () => {
-			const text = '---\ntitle: Binary search\n---\nContent';
-			const index = text.indexOf('Binary search');
-			expect(shouldExcludePosition(text, index)).toBe(true);
-		});
-
-		it('excludes existing wikilinks', () => {
-			const text = 'See [[Binary Search]] for details';
-			const index = text.indexOf('Binary Search');
-			expect(shouldExcludePosition(text, index)).toBe(true);
-		});
-
-		it('excludes markdown links', () => {
-			const text = 'See [Binary Search](link) for details';
-			const index = text.indexOf('Binary Search');
-			expect(shouldExcludePosition(text, index)).toBe(true);
-		});
-
-		it('allows normal text', () => {
-			const text = 'Binary search is a great algorithm';
-			const index = text.indexOf('Binary search');
-			expect(shouldExcludePosition(text, index)).toBe(false);
-		});
-	});
-
-	describe('existing link exclusion', () => {
-		interface WikilinkCandidate {
-			path: string;
-			title: string;
-		}
-
-		function filterExistingLinks(
-			candidates: WikilinkCandidate[],
-			sourceText: string,
-		): WikilinkCandidate[] {
-			// Find all existing wikilinks in source text
-			const existingLinks = new Set<string>();
-			const wikilinkRegex = /\[\[([^\]]+)\]\]/g;
-			let match;
-			while ((match = wikilinkRegex.exec(sourceText)) !== null) {
-				const linkText = match[1].split('|')[0].trim();
-				existingLinks.add(linkText.toLowerCase());
-			}
-
-			return candidates.filter(c => !existingLinks.has(c.title.toLowerCase()));
-		}
-
-		it('excludes already linked notes', () => {
-			const source = 'See [[Binary Search]] for more info';
-			const candidates = [
-				{ path: 'Binary Search.md', title: 'Binary Search' },
-				{ path: 'Linear Search.md', title: 'Linear Search' },
-			];
-			const filtered = filterExistingLinks(candidates, source);
-			expect(filtered.length).toBe(1);
-			expect(filtered[0].title).toBe('Linear Search');
-		});
-
-		it('handles alias links', () => {
-			const source = 'See [[Binary Search|the algorithm]] for more info';
-			const candidates = [
-				{ path: 'Binary Search.md', title: 'Binary Search' },
-				{ path: 'Linear Search.md', title: 'Linear Search' },
-			];
-			const filtered = filterExistingLinks(candidates, source);
-			expect(filtered.length).toBe(1);
-		});
-
-		it('keeps unlinked notes', () => {
-			const source = 'Binary search is useful';
-			const candidates = [
-				{ path: 'Binary Search.md', title: 'Binary Search' },
-				{ path: 'Linear Search.md', title: 'Linear Search' },
-			];
-			const filtered = filterExistingLinks(candidates, source);
-			expect(filtered.length).toBe(2);
-		});
+		// With no words longer than two chars the phrase check runs against ''
+		// and `includes('')` is true for every title, scoring each note 20.
+		expect(candidates).toHaveLength(2);
 	});
 });
 
-describe('Wikilink Suggestions Modal - lifecycle regression', () => {
-	/**
-	 * Regression test for the modal lifecycle fix.
-	 * Previously, calling setSuggestions() before modal.open() would crash
-	 * because listContainer was undefined. The fix stores pending suggestions
-	 * and renders them in onOpen() after listContainer is created.
-	 */
-	interface WikilinkSuggestion {
-		targetPath: string;
-		targetTitle: string;
-		sourcePhrase: string;
-		confidence: number;
-		reason: string;
-	}
+describe('generateSuggestions', () => {
+	it('suggests the full title at high confidence and prefers it over a shorter alias', () => {
+		const suggestions = generateSuggestions('we studied machine learning and ml', [
+			candidate('Machine Learning', { aliases: ['ML'] }),
+		]);
 
-	// Simulate the modal's suggestion handling logic
-	class MockWikilinkModal {
-		private suggestions: WikilinkSuggestion[] = [];
-		private pendingSuggestions: WikilinkSuggestion[] | null = null;
-		private listContainer: { empty: () => void; createDiv: (opts: { cls: string }) => { createDiv: (opts: { cls: string; text: string }) => void; createSpan: (opts: { text: string }) => void } } | null = null;
-
-		setSuggestions(suggestions: WikilinkSuggestion[]): void {
-			this.suggestions = suggestions;
-			if (this.listContainer) {
-				this.renderList();
-			} else {
-				this.pendingSuggestions = suggestions;
-			}
-		}
-
-		simulateOnOpen(): void {
-			// Create the list container (like onOpen does)
-			this.listContainer = {
-				empty: () => {},
-				createDiv: (opts: { cls: string }) => ({
-					createDiv: () => {},
-					createSpan: () => {},
-				}),
-			};
-			// Render pending suggestions
-			if (this.pendingSuggestions !== null) {
-				this.suggestions = this.pendingSuggestions;
-				this.pendingSuggestions = null;
-				this.renderList();
-			}
-		}
-
-		private renderList(): void {
-			if (!this.listContainer) throw new Error('listContainer not initialized');
-			// Just verify we can access listContainer
-			this.listContainer.empty();
-		}
-	}
-
-	it('handles setSuggestions before onOpen without crashing', () => {
-		const modal = new MockWikilinkModal();
-		const suggestions: WikilinkSuggestion[] = [
-			{ targetPath: 'a.md', targetTitle: 'A', sourcePhrase: 'a', confidence: 0.9, reason: 'test' },
-		];
-
-		// This used to crash: setSuggestions called before listContainer exists
-		modal.setSuggestions(suggestions);
-
-		// Now simulate onOpen
-		modal.simulateOnOpen();
-
-		// Should not throw
-		expect(modal['suggestions']).toHaveLength(1);
+		expect(suggestions).toEqual([
+			{
+				targetPath: 'notes/Machine Learning.md',
+				targetTitle: 'Machine Learning',
+				sourcePhrase: 'Machine Learning',
+				confidence: 0.9,
+				reason: 'Matches "Machine Learning" in source text',
+			},
+		]);
 	});
 
-	it('handles setSuggestions after onOpen', () => {
-		const modal = new MockWikilinkModal();
-		const suggestions: WikilinkSuggestion[] = [
-			{ targetPath: 'a.md', targetTitle: 'A', sourcePhrase: 'a', confidence: 0.9, reason: 'test' },
-		];
+	it('falls back to an alias at medium-high confidence when the title is absent', () => {
+		const suggestions = generateSuggestions('the slip box method', [
+			candidate('Zettelkasten', { aliases: ['Slip Box'] }),
+		]);
 
-		modal.simulateOnOpen();
-		modal.setSuggestions(suggestions);
-
-		expect(modal['suggestions']).toHaveLength(1);
+		expect(suggestions).toEqual([
+			{
+				targetPath: 'notes/Zettelkasten.md',
+				targetTitle: 'Zettelkasten',
+				sourcePhrase: 'slip box',
+				confidence: 0.85,
+				reason: 'Matches "slip box" in source text',
+			},
+		]);
 	});
 
-	it('handles multiple setSuggestions calls', () => {
-		const modal = new MockWikilinkModal();
-		const suggestions1: WikilinkSuggestion[] = [
-			{ targetPath: 'a.md', targetTitle: 'A', sourcePhrase: 'a', confidence: 0.9, reason: 'test' },
-		];
-		const suggestions2: WikilinkSuggestion[] = [
-			{ targetPath: 'b.md', targetTitle: 'B', sourcePhrase: 'b', confidence: 0.8, reason: 'test' },
-		];
+	it('falls back to the longest matching word at low confidence', () => {
+		const suggestions = generateSuggestions('quantum entanglement explained simply', [
+			candidate('Quantum Entanglement Theory'),
+		]);
 
-		modal.setSuggestions(suggestions1);
-		modal.simulateOnOpen();
-		modal.setSuggestions(suggestions2);
+		expect(suggestions[0].sourcePhrase).toBe('entanglement');
+		expect(suggestions[0].confidence).toBe(0.6);
+	});
 
-		expect(modal['suggestions']).toHaveLength(1);
-		expect(modal['suggestions'][0].targetTitle).toBe('B');
+	it('produces nothing when only short words or unrelated notes are involved', () => {
+		const suggestions = generateSuggestions('add foo bar', [
+			candidate('Addendum Notes'),
+			candidate('Unrelated Note'),
+		]);
+
+		expect(suggestions).toEqual([]);
+	});
+
+	it('caps the number of suggestions at maxSuggestions', () => {
+		const suggestions = generateSuggestions(
+			'alpha beta gamma',
+			[candidate('Alpha'), candidate('Beta'), candidate('Gamma')],
+			2,
+		);
+
+		expect(suggestions).toHaveLength(2);
+	});
+
+	it('orders suggestions by descending confidence', () => {
+		const suggestions = generateSuggestions(
+			'studied machine learning and the entanglement chapter',
+			[candidate('Quantum Entanglement'), candidate('Machine Learning')],
+		);
+
+		expect(suggestions.map((s) => s.targetTitle)).toEqual(['Machine Learning', 'Quantum Entanglement']);
+		expect(suggestions.map((s) => s.confidence)).toEqual([0.9, 0.6]);
+	});
+});
+
+describe('filterExistingLinks', () => {
+	it('removes candidates already linked by title, including piped targets and other casing', () => {
+		const kept = filterExistingLinks(
+			[candidate('Machine Learning'), candidate('Zettelkasten'), candidate('Archive')],
+			'see [[Machine Learning]] and [[zettelkasten|my notes]] here',
+		);
+
+		expect(kept.map((c) => c.title)).toEqual(['Archive']);
+	});
+
+	it('keeps candidates whose title only appears as display text of another link', () => {
+		const kept = filterExistingLinks(
+			[candidate('Machine Learning'), candidate('Zettelkasten')],
+			'see [[Zettelkasten|Machine Learning]] here',
+		);
+
+		expect(kept.map((c) => c.title)).toEqual(['Machine Learning']);
+	});
+});
+
+describe('isPositionProtected', () => {
+	it('flags positions inside a fenced code block but not after it closes', () => {
+		const fenced = 'before\n```\nquantum realm\n```';
+		expect(isPositionProtected(fenced, fenced.indexOf('quantum'))).toBe(true);
+		const after = '```\ncode\n```\nplain text';
+		expect(isPositionProtected(after, after.indexOf('plain'))).toBe(false);
+	});
+
+	it('flags positions inside inline code but not outside it', () => {
+		const text = 'run `npm test` now';
+		expect(isPositionProtected(text, text.indexOf('npm'))).toBe(true);
+		expect(isPositionProtected(text, text.indexOf('now'))).toBe(false);
+	});
+
+	it('flags positions inside the frontmatter region but not in the body', () => {
+		const text = '---\ntitle: Test\n---\nBody text';
+		expect(isPositionProtected(text, text.indexOf('title'))).toBe(true);
+		expect(isPositionProtected(text, text.indexOf('Body'))).toBe(false);
+	});
+
+	it('flags positions inside an existing wikilink but not after it', () => {
+		const text = 'see [[Note Name]] here';
+		expect(isPositionProtected(text, text.indexOf('Note'))).toBe(true);
+		expect(isPositionProtected(text, text.indexOf('here'))).toBe(false);
+	});
+
+	it('flags positions inside a markdown link but not past its end', () => {
+		const text = 'check [the docs](https://example.com) out';
+		expect(isPositionProtected(text, text.indexOf('the docs'))).toBe(true);
+		expect(isPositionProtected(text, text.indexOf('out'))).toBe(false);
+	});
+});
+
+describe('applyWikilink', () => {
+	it('wraps the first case-insensitive occurrence in a simple link when the phrase matches the title', () => {
+		const result = applyWikilink(
+			'Quantum realm is vast. quantum realm again.',
+			'quantum realm',
+			'Quantum Realm',
+		);
+
+		expect(result).toBe('[[Quantum Realm]] is vast. quantum realm again.');
+	});
+
+	it('uses a piped link when the phrase differs from the title', () => {
+		const result = applyWikilink('the quantum realm is vast', 'quantum realm', 'Quantum Mechanics');
+
+		expect(result).toBe('the [[Quantum Mechanics|quantum realm]] is vast');
+	});
+
+	it('leaves the text unchanged when the first occurrence sits in a protected position', () => {
+		const text = 'before\n```\nquantum realm\n```';
+
+		expect(applyWikilink(text, 'quantum realm', 'Quantum Realm')).toBe(text);
+	});
+
+	it('leaves the text unchanged when the phrase is absent', () => {
+		expect(applyWikilink('nothing to see', 'quantum realm', 'Quantum Realm')).toBe('nothing to see');
+	});
+});
+
+describe('parseWikilinkProposals', () => {
+	it('parses a plain JSON reply keeping every confidence tier', () => {
+		const response = JSON.stringify({
+			suggestions: [
+				{
+					targetPhrase: 'spaced repetition',
+					linkTarget: 'Spaced Repetition',
+					replacement: 'study [[Spaced Repetition]] daily',
+					reason: 'core concept',
+					confidence: 'high',
+				},
+				{
+					targetPhrase: 'active recall',
+					linkTarget: 'Active Recall',
+					replacement: 'practice [[Active Recall]]',
+					reason: 'technique',
+					confidence: 'medium',
+				},
+				{
+					targetPhrase: 'interleaving',
+					linkTarget: 'Interleaving',
+					replacement: 'mix topics',
+					reason: 'strategy',
+					confidence: 'low',
+				},
+			],
+		});
+
+		expect(parseWikilinkProposals(response)).toEqual([
+			{
+				targetPhrase: 'spaced repetition',
+				linkTarget: 'Spaced Repetition',
+				replacement: 'study [[Spaced Repetition]] daily',
+				reason: 'core concept',
+				confidence: 'high',
+			},
+			{
+				targetPhrase: 'active recall',
+				linkTarget: 'Active Recall',
+				replacement: 'practice [[Active Recall]]',
+				reason: 'technique',
+				confidence: 'medium',
+			},
+			{
+				targetPhrase: 'interleaving',
+				linkTarget: 'Interleaving',
+				replacement: 'mix topics',
+				reason: 'strategy',
+				confidence: 'low',
+			},
+		]);
+	});
+
+	it('parses a reply wrapped in a code fence', () => {
+		const proposal = {
+			targetPhrase: 'a phrase',
+			linkTarget: 'A Note',
+			replacement: 'see [[A Note]] now',
+			reason: 'related',
+			confidence: 'medium',
+		};
+		const response = '```json\n' + JSON.stringify({ suggestions: [proposal] }) + '\n```';
+
+		expect(parseWikilinkProposals(response)).toEqual([proposal]);
+	});
+
+	it('drops entries that fail any field type check or carry an unknown confidence', () => {
+		const response = JSON.stringify({
+			suggestions: [
+				{
+					targetPhrase: 'a phrase',
+					linkTarget: 'A',
+					replacement: '[[A]]',
+					reason: 'r',
+					confidence: 'medium',
+				},
+				{ targetPhrase: 'b phrase', linkTarget: 'B', replacement: '[[B]]', confidence: 'low' },
+				{ targetPhrase: 'c phrase', linkTarget: 'C', replacement: '[[C]]', reason: 'r', confidence: 'urgent' },
+				{ targetPhrase: 3, linkTarget: 'D', replacement: '[[D]]', reason: 'r', confidence: 'low' },
+				'just a string',
+				null,
+			],
+		});
+
+		expect(parseWikilinkProposals(response)).toEqual([
+			{
+				targetPhrase: 'a phrase',
+				linkTarget: 'A',
+				replacement: '[[A]]',
+				reason: 'r',
+				confidence: 'medium',
+			},
+		]);
+	});
+
+	it('returns an empty list on malformed JSON or a missing suggestions array', () => {
+		expect(parseWikilinkProposals('this is not json')).toEqual([]);
+		expect(parseWikilinkProposals(JSON.stringify({ nope: [] }))).toEqual([]);
+		expect(parseWikilinkProposals(JSON.stringify({ suggestions: 'everything' }))).toEqual([]);
+	});
+});
+
+describe('isProposalAlreadyLinked', () => {
+	it('is true exactly when the replacement contains both brackets', () => {
+		expect(isProposalAlreadyLinked({ replacement: 'study [[Spaced Repetition]] daily' })).toBe(true);
+		expect(isProposalAlreadyLinked({ replacement: 'plain sentence' })).toBe(false);
+		expect(isProposalAlreadyLinked({ replacement: 'half [ open' })).toBe(false);
+		expect(isProposalAlreadyLinked({ replacement: 'half ] close' })).toBe(false);
 	});
 });

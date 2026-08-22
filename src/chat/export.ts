@@ -8,6 +8,26 @@ export function sanitizeExportName(name: string): string {
 	return name.replace(/[<>:"/\\|?*]/g, '-');
 }
 
+/** Result of checking export inputs: either a ready-to-run export or why not. */
+export type ExportValidation =
+	| { valid: true; name: string; folder: string; mode: ConversationExportMode }
+	| { valid: false; reason: 'missing-name' | 'missing-mode' };
+
+/**
+ * Validate export inputs before anything is written.
+ * The name and folder are trimmed; a missing name or unselected mode blocks.
+ */
+export function validateExportInput(
+	rawName: string,
+	rawFolder: string,
+	mode: ConversationExportMode | null,
+): ExportValidation {
+	const trimmedName = rawName.trim();
+	if (!trimmedName) return { valid: false, reason: 'missing-name' };
+	if (!mode) return { valid: false, reason: 'missing-mode' };
+	return { valid: true, name: trimmedName, folder: rawFolder.trim(), mode };
+}
+
 /**
  * Render a conversation into the Markdown body of an exported note.
  *
