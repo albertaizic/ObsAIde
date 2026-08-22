@@ -25,14 +25,14 @@ ObsAIde talks directly to the provider you choose — OpenRouter, OpenAI, Anthro
 - **Save conversation as note** — export the full transcript or answers-only to a Markdown note with frontmatter.
 - **Short / Normal / Detailed** — a compact header selector controls response verbosity at the prompt level (default: Normal).
 - **Current section context** — attach the Markdown section containing the cursor (by heading hierarchy, including nested subsections).
-- **Smart context scope selector** — choose None / Selection / Section / Note / Linked notes / Folder as the automatic context scope, separate from manual attachments.
+- **Smart context scope selector** — choose None / Selection / Section / Note / Linked notes / Folder as the context scope of the current conversation, separate from manual attachments. New conversations start with the default set in Settings, and an unavailable scope attaches nothing rather than substituting something else.
 
 ### New in 0.3.0
 
 - **Conversation Branching** — from any message in a conversation, choose "Branch from here" to create a new conversation with history up to that point. The original remains untouched. Branches persist independently with parent metadata.
-- **Assistant Profiles** — named reusable configurations (General, Tutor, Writer, Coding Assistant, Researcher) with custom instructions, optional provider/model override, and response length. Create custom profiles, switch per conversation. Tutor mode is now the Tutor profile. Profiles and custom actions remain separate concepts.
-- **Create Quiz Note** — generate a study quiz from attached notes (selection, section, note, or folder). Configure question count (5/10/15/20), difficulty (easy/medium/hard/mixed), and type (short answer/multiple choice/mixed). Includes optional answer key. Outputs a normal `.md` note in a folder of your choice.
-- **Wikilink Suggestions** — for the current selection, section, or note, Aide discovers existing notes by title/aliases/headings, ranks them by relevance, and suggests `[[wikilinks]]` with the source phrase. You review and apply with aliases (`[[Target|source phrase]]`). Skips code blocks, inline code, frontmatter, and existing links.
+- **Assistant Profiles** — named reusable configurations (General, Tutor, Writer, Coding Assistant, Researcher) with their own instructions and optional provider, model, response-length and context-scope overrides. Create, edit, enable/disable and duplicate profiles in Settings; switch profiles from the sidebar header, which applies to the open conversation and to new ones. While a profile is active its overrides win over the global defaults. Tutor mode is now the Tutor profile. Profiles and custom actions remain separate concepts.
+- **Create Quiz Note** — generate a study quiz from attached notes (selection, section, note, or folder). Configure question count (5/10/15/20), difficulty (easy/medium/hard/mixed), and type (short answer / multiple choice / true-false / explain / application / mixed). Includes optional answer key. Outputs a normal `.md` note in a folder of your choice.
+- **Wikilink Suggestions** — pick target notes and source notes/folders, and Aide asks the model for genuine conceptual connections between them. Proposed rewrites arrive as a diff you review before anything is written. Protected regions — code blocks, inline code, frontmatter, existing wikilinks and Markdown links — are never touched.
 
 ## Screenshots
 
@@ -94,7 +94,7 @@ For a local model server, use the **Custom** provider: set the base URL (for exa
 
 ### The sidebar
 
-Select the ribbon icon or run **Open Aide**. The header shows the current provider and model — select either to change it, and the choice is remembered per provider. The overflow menu holds new conversation, recent conversations, tutor mode, and clearing or deleting the current conversation.
+Select the ribbon icon or run **Open Aide**. The header shows the active profile plus the current provider and model — select any of them to change it. The overflow menu holds new conversation, recent conversations, tutor mode, quiz note creation, wikilink suggestions, saving the conversation as a note, and clearing or deleting the current conversation.
 
 Enter sends, Shift+Enter adds a line. You can keep typing while a reply streams; the send button becomes stop.
 
@@ -155,7 +155,9 @@ Open **Recent conversations…** from the sidebar overflow menu to see your hist
 
 ### Assistant profiles
 
-Open the **Profiles** section in Settings. Built-in profiles: General, Tutor, Writer, Coding Assistant, Researcher. Each has its own instructions, optional provider/model override, and response length. Create custom profiles, enable/disable them, and set the active profile per conversation. The active profile is shown in the sidebar header.
+Open the **Profiles** section in Settings → ObsAIde. Built-in profiles — General, Tutor, Writer, Coding Assistant, Researcher — can be inspected and duplicated into editable copies, but never edited or deleted. Custom profiles support create, edit, delete, enable/disable and duplicate. Every profile has its own instructions plus optional overrides for provider, model, response length and default context scope; leave an override on "use current" to follow the global default.
+
+Switching profiles from the sidebar header changes the global default **and** applies to the conversation that is open. While a profile is active, its pinned provider, model and response length take precedence over the global settings, and new conversations started with it use its context scope. The active profile is shown in the sidebar header.
 
 ### Create quiz note
 
@@ -163,7 +165,7 @@ Attach some notes (selection, section, note, or folder), open the sidebar overfl
 
 - **Questions**: 5 / 10 / 15 / 20
 - **Difficulty**: Easy / Medium / Hard / Mixed
-- **Type**: Short answer / Multiple choice / Mixed
+- **Type**: Short answer / Multiple choice / True-false / Explain / Application / Mixed
 - **Include answer key**: yes/no
 - **Name**: e.g., "Binary Search Quiz"
 - **Folder**: destination folder in your vault
@@ -172,13 +174,9 @@ Aide generates the quiz in one request, grounded in your attached notes, and cre
 
 ### Wikilink suggestions
 
-Open a Markdown note, optionally select text (or use a section/note scope), run **Suggest wikilinks…** from the sidebar overflow menu or the inline ✨ Aide menu. Aide scans your vault for candidate notes (by filename, title, aliases, headings), filters out already-linked notes, and shows a review modal with:
+Open a Markdown note, run **Suggest wikilinks…** from the sidebar overflow menu. A setup modal lets you pick one or more **target notes** and the **source notes or folders** to draw connections from. Aide then sends one request per target and proposes links that represent genuine conceptual relationships.
 
-- Target note title and path
-- Source phrase in your text
-- Reason/confidence
-
-Check the ones you want, click **Apply selected**. Aide wraps the source phrase in `[[Target|phrase]]` (or `[[Target]]` if the phrase matches the title). Protected regions are skipped: code blocks, inline code, frontmatter, existing wikilinks, and Markdown links.
+Proposed rewrites are shown as a diff through the same review modal used for rewriting actions — nothing is written until you accept there. When applying, phrases already inside protected regions (code blocks, inline code, frontmatter, existing wikilinks, Markdown links) are skipped, so existing formatting survives.
 
 ## Note context
 
@@ -268,9 +266,9 @@ The editor context menu adds **Ask Aide about this** and **Aide actions…**.
 | Response length | Short / Normal / Detailed — controls prompt-level verbosity (default: Normal) |
 | Context budgets | Per-note and per-request character limits |
 | Conversation history | Store locally, or turn off and delete |
-| Context scope | Default automatic context: None / Selection / Section / Note / Linked / Folder |
+| Default context for new conversations | None (default) / Selection / Section / Note / Linked / Folder. Unavailable scopes attach nothing and say so; existing conversations keep their own scope |
 | Custom actions | Create, edit, delete, enable/disable reusable AI actions |
-| Assistant profiles | Create, edit, delete, enable/disable profiles; set active profile per conversation; built-in: General, Tutor, Writer, Coding Assistant, Researcher |
+| Assistant profiles | Create, edit, delete, enable/disable and duplicate profiles; built-ins are inspectable and duplicable only; optional provider/model/length/context overrides with "use current" fallbacks |
 
 Temperature is capped at `1.0` on purpose: above that most chat models degrade into incoherent output, and a global slider is the wrong place to do that by accident. A value stored by an earlier version is clamped and rewritten on load, so it cannot keep being sent invisibly.
 
@@ -305,8 +303,8 @@ src/
     anthropic.ts  gemini.ts  openrouter.ts
     service.ts            settings-aware facade used by the rest of the plugin
 
-  chat/                   conversation model, local store, chat controller, quiz logic
-  context/                attachment capture, folder collection, formatting, vault search, wikilinks
+  chat/                   conversation model, local store, chat controller, quiz parsing/validation
+  context/                attachment capture, folder collection, formatting, wikilink suggestions
   actions/                note actions, edit anchors, safe apply
   prompts/                all prompt text
   settings/               settings schema, validation, settings tab, profiles
@@ -327,7 +325,7 @@ Adding a provider means writing one adapter and one catalogue entry. Adding a no
 
 ## Roadmap
 
-- Per-conversation provider and model overrides (profiles partially address this)
+- Per-conversation provider and model overrides independent of profiles
 - Token and cost estimates before sending
 - Vault-wide semantic search as context
 
