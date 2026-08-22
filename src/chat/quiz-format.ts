@@ -29,6 +29,30 @@ const QUESTION_TYPES: readonly QuizQuestionType[] = [
 	'application',
 ];
 
+/** Human-readable type names the renderer owns — never the model's wording. */
+export const QUIZ_TYPE_LABELS: Record<QuizQuestionType, string> = {
+	'short-answer': 'Short Answer',
+	'multiple-choice': 'Multiple Choice',
+	'true-false': 'True / False',
+	'explain': 'Explain / Reasoning',
+	'application': 'Application / Scenario',
+};
+
+/**
+ * A leading choice marker some models add despite instructions:
+ * "A.", "A)", "(A)", "A:", "A -". The renderer letters options itself, so a
+ * marker that survives here would come out doubled ("A. A. Binary search").
+ *
+ * Requires an explicit separator, so plain text that merely starts with
+ * "A" or "B" is untouched.
+ */
+const CHOICE_MARKER = /^\s*\(\s*[A-Da-d]\s*\)\s*|^\s*[A-Da-d]\s*[.)\]:]\s*|^\s*[A-Da-d]\s+[-–—]\s+/;
+
+/** Strip one obvious leading A–D choice marker from an option's text. */
+export function stripChoiceMarker(option: string): string {
+	return option.replace(CHOICE_MARKER, '').trim();
+}
+
 /**
  * Parse the model's quiz payload, tolerating surrounding prose or code fences.
  * Returns null when the response carries no questions array at all.
@@ -125,25 +149,31 @@ export function validateQuizData(
 }
 
 /**
- * Render a validated quiz as study Markdown: one heading per problem,
- * lettered options for multiple choice, collapsible answer callouts.
+ * Render a validated quiz as study Markdown: one heading per problem —
+ * labelled with its type, so mixed quizzes are checkable at a glance — with
+ * lettered options for multiple choice and collapsible answer callouts.
+ *
+ * Choice letters are added here and only here; incoming option text is
+ * stripped of any model-supplied marker first so prefixes can never double up.
  */
 export function renderQuizMarkdown(
 	data: { questions: QuizQuestion[] },
 	includeAnswers: boolean,
 ): string {
+	const letters = ['A', 'B', 'C', 'D'];
 	let markdown = '';
 	for (let i = 0; i < data.questions.length; i++) {
 		const q = data.questions[i];
 		if (!q) continue;
 
-		markdown += `## Problem ${i + 1}\n`;
+		const typeLabel = QUIZ_TYPE_LABELS[q.type] ?? q.type;
+		markdown += `## Problem ${i + 1} (${typeLabel})\n`;
 		markdown += `**${q.question}**\n\n`;
 
 		if (q.type === 'multiple-choice' && Array.isArray(q.options)) {
-			const letters = ['A', 'B', 'C', 'D'];
-			for (let j = 0; j < q.options.length; j++) {
-				markdown += `- ${letters[j]}. ${q.options[j]}\n`;
+			const cleaned = q.options.map(stripChoiceMarker);
+			for (let j = 0; j < cleaned.length; j++) {
+				markdown += `- ${letters[j]}. ${cleaned[j]}\n`;
 			}
 			markdown += '\n';
 		}
@@ -151,8 +181,8 @@ export function renderQuizMarkdown(
 		if (includeAnswers) {
 			markdown += `> [!answer]- ✅ Answer\n`;
 			if (q.type === 'multiple-choice' && Array.isArray(q.options) && typeof q.correctIndex === 'number') {
-				const letters = ['A', 'B', 'C', 'D'];
-				markdown += `> **${letters[q.correctIndex]}. ${q.options[q.correctIndex]}**\n`;
+				const correct = stripChoiceMarker(q.options[q.correctIndex] ?? '');
+				markdown += `> **${letters[q.correctIndex]}. ${correct}**\n`;
 			} else {
 				markdown += `> ${q.answer}\n`;
 			}

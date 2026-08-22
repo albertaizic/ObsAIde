@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { QuizQuestion } from './quiz-format';
-import { parseQuizJson, renderQuizMarkdown, validateQuizData } from './quiz-format';
+import { parseQuizJson, renderQuizMarkdown, stripChoiceMarker, validateQuizData } from './quiz-format';
 import {
 	buildQuizUserPrompt,
 	getDifficultyInstruction,
@@ -167,10 +167,10 @@ describe('validateQuizData', () => {
 });
 
 describe('renderQuizMarkdown', () => {
-	it('renders one numbered heading with a bold question per problem', () => {
+	it('renders one numbered heading with type label and a bold question per problem', () => {
 		const markdown = renderQuizMarkdown({ questions: [multipleChoice(), trueFalse()] }, false);
-		expect(markdown).toContain('## Problem 1\n');
-		expect(markdown).toContain('## Problem 2\n');
+		expect(markdown).toContain('## Problem 1 (Multiple Choice)\n');
+		expect(markdown).toContain('## Problem 2 (True / False)\n');
 		expect(markdown).toContain('**What does binary search require?**');
 		expect(markdown).toContain('**Binary search needs sorted input.**');
 	});
@@ -265,5 +265,89 @@ describe('quiz prompt instruction fragments', () => {
 		expect(getTypeInstruction('explain')).toContain('"why" or "how"');
 		expect(getTypeInstruction('application')).toContain('concrete scenario');
 		expect(getTypeInstruction('mixed')).toContain('across all 5 types');
+	});
+});
+
+describe('quiz type labels in headings', () => {
+	const cases: Array<[QuizQuestion['type'], string]> = [
+		['short-answer', 'Short Answer'],
+		['multiple-choice', 'Multiple Choice'],
+		['true-false', 'True / False'],
+		['explain', 'Explain / Reasoning'],
+		['application', 'Application / Scenario'],
+	];
+
+	it('labels every problem heading with the canonical type name the renderer owns', () => {
+		for (const [type, label] of cases) {
+			const question: QuizQuestion = { type, question: 'Q?', answer: 'A' };
+			const markdown = renderQuizMarkdown({ questions: [question] }, true);
+			expect(markdown).toContain(`## Problem 1 (${label})`);
+		}
+	});
+
+	it('makes a 5-question mixed quiz verifiable at a glance, one of each type', () => {
+		const questions = cases.map(([type]) => ({ type, question: 'Q?', answer: 'A' }) as QuizQuestion);
+		const markdown = renderQuizMarkdown({ questions }, true);
+		expect(markdown).toContain('## Problem 1 (Short Answer)');
+		expect(markdown).toContain('## Problem 2 (Multiple Choice)');
+		expect(markdown).toContain('## Problem 3 (True / False)');
+		expect(markdown).toContain('## Problem 4 (Explain / Reasoning)');
+		expect(markdown).toContain('## Problem 5 (Application / Scenario)');
+	});
+});
+
+describe('stripChoiceMarker (multiple-choice normalization)', () => {
+	it.each([
+		['Binary search', 'Binary search'],
+		['A. Binary search', 'Binary search'],
+		['a. binary search', 'binary search'],
+		['B) Linear search', 'Linear search'],
+		['(C) Both require sorted data', 'Both require sorted data'],
+		['D: Neither requires sorted data', 'Neither requires sorted data'],
+		['A - Binary search', 'Binary search'],
+		['A – Binary search', 'Binary search'],
+		['b - another option', 'another option'],
+	])('strips the leading marker from %j -> %j', (input, expected) => {
+		expect(stripChoiceMarker(input)).toBe(expected);
+	});
+
+	it('does not strip legitimate content that merely starts with A–D', () => {
+		expect(stripChoiceMarker('A quick sort variant')).toBe('A quick sort variant');
+		expect(stripChoiceMarker('Divide and conquer strategies')).toBe('Divide and conquer strategies');
+		expect(stripChoiceMarker('')).toBe('');
+	});
+
+	it('renders doubled prefixes never: model-supplied markers are replaced by renderer letters', () => {
+		const question: QuizQuestion = {
+			type: 'multiple-choice',
+			question: 'Which search algorithm requires sorted data?',
+			options: [
+				'A. Binary search',
+				'B) Linear search',
+				'(C) Both require sorted data',
+				'D - Neither requires sorted data',
+			],
+			correctIndex: 0,
+			answer: 'A',
+		};
+		const markdown = renderQuizMarkdown({ questions: [question] }, true);
+		expect(markdown).toContain('- A. Binary search\n');
+		expect(markdown).toContain('- B. Linear search\n');
+		expect(markdown).toContain('- C. Both require sorted data\n');
+		expect(markdown).toContain('- D. Neither requires sorted data\n');
+		expect(markdown).not.toContain('A. A.');
+		expect(markdown).not.toContain('B) B.');
+	});
+
+	it('derives the correct-option letter from correctIndex over stripped text', () => {
+		const question: QuizQuestion = {
+			type: 'multiple-choice',
+			question: 'Pick C?',
+			options: ['one', '(C) real answer', 'three', 'four'],
+			correctIndex: 1,
+			answer: 'real answer',
+		};
+		const markdown = renderQuizMarkdown({ questions: [question] }, true);
+		expect(markdown).toContain('> **B. real answer**');
 	});
 });
