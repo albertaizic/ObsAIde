@@ -9,9 +9,10 @@ import {
 	getBuiltinProfile,
 	isBuiltinProfile,
 	migrateTutorMode,
+	resolveEffectiveResponseLength,
 	resolveEffectiveSettings,
 } from './profiles';
-import type { AssistantProfile, ObsAideSettings, ProviderSettings } from './types';
+import type { AssistantProfile, ObsAideSettings, ProviderSettings, ResponseLength } from './types';
 
 function customFixture(id: string, overrides: Partial<AssistantProfile> = {}): AssistantProfile {
 	return {
@@ -340,5 +341,24 @@ describe('migrateTutorMode', () => {
 
 	it('leaves settings alone when tutor mode was off', () => {
 		expect(migrateTutorMode({ tutorModeByDefault: false })).toEqual({});
+	});
+});
+
+describe('resolveEffectiveResponseLength', () => {
+	const globals = { responseLength: 'normal' as const };
+
+	it('lets an explicit profile override win', () => {
+		const tutor = { ...customFixture('tutor'), responseLength: 'detailed' as const };
+		expect(resolveEffectiveResponseLength(tutor, globals)).toBe('detailed');
+	});
+
+	it('falls back to the global length for profiles without an override', () => {
+		expect(resolveEffectiveResponseLength(customFixture('general'), globals)).toBe('normal');
+		expect(resolveEffectiveResponseLength(undefined, { responseLength: 'detailed' })).toBe('detailed');
+	});
+
+	it('never returns an invalid length, whatever the input', () => {
+		const broken = { ...customFixture('x'), responseLength: 'concise' as unknown as ResponseLength };
+		expect(resolveEffectiveResponseLength(broken, globals)).toBe('normal');
 	});
 });

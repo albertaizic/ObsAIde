@@ -5,6 +5,7 @@ import {
 	findConfigurationIssue,
 	isProviderConfigured,
 	needsMigration,
+	normalizeResponseLength,
 	normalizeSettings,
 	providerLabel,
 	resolveBaseUrl,
@@ -213,5 +214,17 @@ describe('needsMigration contextScope and schema checks', () => {
 		const settings = createDefaultSettings();
 		const raw = { ...settings, schemaVersion: SCHEMA_VERSION + 1 };
 		expect(needsMigration(raw, normalizeSettings(raw))).toBe(true);
+	});
+});
+
+describe('normalizeResponseLength', () => {
+	it('passes valid lengths through and coerces everything else to normal', () => {
+		expect(normalizeResponseLength('short')).toBe('short');
+		expect(normalizeResponseLength('normal')).toBe('normal');
+		expect(normalizeResponseLength('detailed')).toBe('detailed');
+		expect(normalizeResponseLength(undefined)).toBe('normal');
+		expect(normalizeResponseLength('')).toBe('normal');
+		expect(normalizeResponseLength('concise')).toBe('normal');
+		expect(normalizeResponseLength(42)).toBe('normal');
 	});
 });

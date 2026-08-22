@@ -230,6 +230,84 @@ describe('effectiveContextScope', () => {
 	});
 });
 
+describe('deleteConversation', () => {
+	it('deleting a non-current conversation leaves the active one untouched', () => {
+		const { controller, store } = makeHarness(({ store }) => {
+			store.create('chat').messages.push(createMessage('user', 'first'));
+			store.create('chat').messages.push(createMessage('user', 'second'));
+		});
+		const currentId = controller.current.id;
+		const reasons = collectReasons(controller);
+
+		const victim = store.list().find(c => c.id !== currentId)!;
+		controller.deleteConversation(victim.id);
+
+		expect(controller.current.id).toBe(currentId);
+		expect(store.get(currentId)).toBeDefined();
+		expect(reasons).toEqual(['conversation']);
+	});
+
+	it('deleting the current conversation loads the newest remaining one', () => {
+		const { controller, store } = makeHarness(({ store }) => {
+			store.create('chat').messages.push(createMessage('user', 'first'));
+			store.create('chat').messages.push(createMessage('user', 'second'));
+		});
+		// Constructor adopted the newest ("second"); open "first", then create
+		// one more so deleting it must fall back to "second", not to nothing.
+		const oldest = store.list().at(-1)!;
+		controller.openConversation(oldest.id);
+		const deletedId = controller.current.id;
+
+		controller.deleteConversation(deletedId);
+
+		expect(store.get(deletedId)).toBeUndefined();
+		expect(controller.current.id).not.toBe(deletedId);
+		expect(controller.current).toBe(store.list()[0]);
+	});
+
+	it('deleting the current branch marks the parent as current again when it is newest', () => {
+		const { controller, store } = makeHarness();
+		controller.current.messages.push(createMessage('user', 'parent turn'));
+		controller.branchFromMessage(controller.current.messages[0]!.id);
+		const branchId = controller.current.id;
+
+		controller.deleteConversation(branchId);
+
+		expect(store.get(branchId)).toBeUndefined();
+		expect(controller.current.parentConversationId).toBeUndefined();
+		expect(controller.current.messages.length).toBe(1);
+	});
+
+	it('deleting the last stored conversation lands on a fresh stamped conversation', () => {
+		const { controller, settings } = makeHarness();
+		settings.contextScope = 'section';
+		const doomedId = controller.current.id;
+		controller.current.messages.push(createMessage('user', 'only conversation'));
+
+		controller.deleteConversation(doomedId);
+
+		expect(controller.current.id).not.toBe(doomedId);
+		expect(controller.current.messages).toEqual([]);
+		expect(controller.current.activeProfileId).toBe('general');
+		expect(controller.current.contextScope).toBe('section');
+	});
+
+	it('never leaves a deleted conversation as current', () => {
+		const { controller, store } = makeHarness();
+		const ids: string[] = [];
+		for (let i = 0; i < 3; i++) {
+			controller.newConversation();
+			controller.current.messages.push(createMessage('user', `turn ${i}`));
+			ids.push(controller.current.id);
+		}
+		for (const id of ids) {
+			if (!store.get(id)) continue;
+			controller.deleteConversation(id);
+			expect(store.get(controller.current.id)).toBeDefined();
+		}
+	});
+});
+
 describe('generation edges', () => {
 	it('regenerate is a no-op when there is no assistant reply', async () => {
 		const { controller } = makeHarness();
