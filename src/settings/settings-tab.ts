@@ -174,14 +174,17 @@ export class ObsAideSettingTab extends PluginSettingTab {
 	// --- profiles ------------------------------------------------------------
 
 	private renderProfiles(container: HTMLElement): void {
-		new Setting(container).setName('Assistant profiles').setHeading();
+		// Stable anchor: "Edit profiles" in the sidebar scrolls exactly here.
+		const section = container.createDiv({ cls: 'obsaide-profiles-section' });
 
-		container.createEl('p', {
+		new Setting(section).setName('Assistant profiles').setHeading();
+
+		section.createEl('p', {
 			cls: 'setting-item-description obsaide-settings-note',
 			text: 'A profile combines standing instructions with optional provider, model, response-length and context defaults. Switch profiles from the Aide sidebar header; the switch applies to the open conversation and to new ones.',
 		});
 
-		new Setting(container)
+		new Setting(section)
 			.setName('Add profile')
 			.addButton((button) =>
 				button
@@ -190,7 +193,7 @@ export class ObsAideSettingTab extends PluginSettingTab {
 					.onClick(() => this.openProfileModal(null)),
 			);
 
-		const list = container.createDiv({ cls: 'obsaide-custom-actions-list obsaide-profile-list' });
+		const list = section.createDiv({ cls: 'obsaide-custom-actions-list obsaide-profile-list' });
 		for (const profile of this.plugin.profiles.getAll()) {
 			this.renderProfileItem(list, profile);
 		}

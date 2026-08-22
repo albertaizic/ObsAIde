@@ -120,8 +120,8 @@ export default class ObsAidePlugin extends Plugin {
 		return view instanceof AideChatView ? view : null;
 	}
 
-	/** Jump straight to this plugin's settings tab. */
-	openSettings(): void {
+	/** Jump straight to this plugin's settings tab, optionally to a section. */
+	openSettings(section?: 'profiles'): void {
 		const setting = (
 			this.app as unknown as {
 				setting?: { open(): void; openTabById(id: string): void };
@@ -133,5 +133,38 @@ export default class ObsAidePlugin extends Plugin {
 		}
 		setting.open();
 		setting.openTabById(this.manifest.id);
+		if (section === 'profiles') {
+			this.scrollToSettingsSection('.obsaide-profiles-section');
+		}
+	}
+
+	/**
+	 * Scroll a settings section into view once the tab has rendered.
+	 *
+	 * A bounded requestAnimationFrame loop avoids both arbitrary delays and
+	 * missing the element when Obsidian builds the settings DOM a frame or two
+	 * after `open()`. Works whether or not Settings was already open.
+	 */
+	private scrollToSettingsSection(selector: string): void {
+		const container = this.app.workspace.containerEl;
+		let frames = 0;
+		const look = (): void => {
+			const target = container.querySelector<HTMLElement>(selector);
+			if (target) {
+				target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+				target.classList.remove('obsaide-settings-flash');
+				// Restart the highlight even if the class was already present.
+				void target.offsetWidth;
+				target.classList.add('obsaide-settings-flash');
+				target.addEventListener(
+					'animationend',
+					() => target.classList.remove('obsaide-settings-flash'),
+					{ once: true },
+				);
+				return;
+			}
+			if (frames++ < 120) window.requestAnimationFrame(look);
+		};
+		window.requestAnimationFrame(look);
 	}
 }

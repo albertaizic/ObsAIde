@@ -1,5 +1,10 @@
 import { Menu, setIcon, setTooltip, type App } from 'obsidian';
 import type { Attachment } from '../context/types';
+import {
+	normalizeResponseLength,
+	type ContextScope,
+	type ResponseLength,
+} from '../settings/types';
 import { summarize } from '../utils/text';
 import { attachmentIcon, attachmentLabel } from './attachment-chip';
 import { NoteAutocomplete, type NoteAttachment } from './note-autocomplete';
@@ -42,6 +47,9 @@ export class Composer {
 	private readonly scopeButton: HTMLButtonElement;
 	private readonly autocomplete: NoteAutocomplete;
 	private generating = false;
+	/** The length/scope the controls currently display — the check-mark source. */
+	private length: ResponseLength = 'normal';
+	private scope: ContextScope = 'none';
 
 	constructor(
 		container: HTMLElement,
@@ -225,17 +233,19 @@ export class Composer {
 		this.textarea.setCssStyles({ height: `${height}px` });
 	}
 
-	/** Update the response length button label. */
-	setLength(length: 'short' | 'normal' | 'detailed'): void {
-		const labels: Record<string, string> = { short: 'Short', normal: 'Normal', detailed: 'Detailed' };
+	/** Update the response length button label from the effective length. */
+	setLength(length: ResponseLength): void {
+		// Never trust the caller's value: an invalid or missing one is Normal.
+		this.length = normalizeResponseLength(length);
+		const labels: Record<ResponseLength, string> = { short: 'Short', normal: 'Normal', detailed: 'Detailed' };
 		// Always show "Length: Normal" format - do not use compact mode
-		this.lengthButton.setText(`Length: ${labels[length] ?? 'Normal'}`);
-		setTooltip(this.lengthButton, `Response length: ${labels[length]}. Click to change.`);
+		this.lengthButton.setText(`Length: ${labels[this.length]}`);
+		setTooltip(this.lengthButton, `Response length: ${labels[this.length]}. Click to change.`);
 	}
 
 	/** Update the context scope button label with descriptive text. */
-	setScope(scope: 'none' | 'selection' | 'section' | 'note' | 'linked' | 'folder', contextInfo?: string): void {
-		const labels: Record<string, string> = {
+	setScope(scope: ContextScope, contextInfo?: string): void {
+		const labels: Record<ContextScope, string> = {
 			none: 'None',
 			selection: 'Selection',
 			section: 'Section',
@@ -243,7 +253,8 @@ export class Composer {
 			linked: 'Linked notes',
 			folder: 'Folder',
 		};
-		const baseLabel = labels[scope] ?? 'None';
+		this.scope = scope;
+		const baseLabel = labels[scope];
 		let displayText: string;
 		if (scope === 'none') {
 			displayText = 'Context: None';
@@ -258,7 +269,6 @@ export class Composer {
 
 	private showLengthMenu(): void {
 		const menu = new Menu();
-		const currentLength = this.lengthButton.textContent ?? 'Normal';
 
 		for (const [value, label] of [
 			['short', 'Short'],
@@ -268,7 +278,7 @@ export class Composer {
 			menu.addItem((item: MenuItem) => {
 				item
 					.setTitle(label)
-					.setChecked(value === currentLength)
+					.setChecked(value === this.length)
 					.onClick(() => {
 						this.setLength(value);
 						this.callbacks.onChangeLength?.(value);
@@ -283,10 +293,9 @@ export class Composer {
 
 	private showScopeMenu(): void {
 		const menu = new Menu();
-		const currentScope = this.scopeButton.textContent ?? 'Selection';
 
-		const scopes: Array<'none' | 'selection' | 'section' | 'note' | 'linked' | 'folder'> = ['none', 'selection', 'section', 'note', 'linked', 'folder'];
-		const scopeLabels: Record<string, string> = {
+		const scopes: readonly ContextScope[] = ['none', 'selection', 'section', 'note', 'linked', 'folder'];
+		const scopeLabels: Record<ContextScope, string> = {
 			none: 'None',
 			selection: 'Selection',
 			section: 'Section',
@@ -298,8 +307,8 @@ export class Composer {
 		for (const value of scopes) {
 			menu.addItem((item: MenuItem) => {
 				item
-					.setTitle(scopeLabels[value] ?? value)
-					.setChecked(value === currentScope)
+					.setTitle(scopeLabels[value])
+					.setChecked(value === this.scope)
 					.onClick(() => {
 						this.setScope(value);
 						this.callbacks.onChangeScope?.(value);

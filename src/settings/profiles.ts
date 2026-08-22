@@ -1,5 +1,11 @@
 import type { ProviderId } from '../providers/types';
-import { type AssistantProfile, type ContextScope, type ObsAideSettings, type ResponseLength } from './types';
+import {
+	normalizeResponseLength,
+	type AssistantProfile,
+	type ContextScope,
+	type ObsAideSettings,
+	type ResponseLength,
+} from './types';
 
 // The canonical profile shape lives in `./types`; re-exported here so profile
 // consumers can import it alongside the registry.
@@ -196,8 +202,20 @@ export function resolveEffectiveSettings(
 ): EffectiveSettings {
 	const providerId = profile?.providerId ?? settings.defaultProvider;
 	const model = profile?.model?.trim() || settings.providers[providerId].model;
-	const responseLength = profile?.responseLength ?? settings.responseLength;
+	const responseLength = normalizeResponseLength(profile?.responseLength ?? settings.responseLength);
 	return { providerId, model, responseLength };
+}
+
+/**
+ * The response length a turn will actually use — the one shared resolver for
+ * both the composer label and prompt construction, so the UI can never show
+ * something other than what is sent.
+ */
+export function resolveEffectiveResponseLength(
+	profile: AssistantProfile | undefined,
+	settings: Pick<ObsAideSettings, 'responseLength'>,
+): ResponseLength {
+	return normalizeResponseLength(profile?.responseLength ?? settings.responseLength);
 }
 
 /** Profile registry for managing built-in and custom profiles. */

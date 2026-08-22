@@ -158,6 +158,15 @@ export class AideHeader {
 			);
 		}
 
+		// Not a profile — a shortcut into the Profiles settings section.
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle('Edit profiles')
+				.setIcon('sliders-horizontal')
+				.onClick(() => this.plugin.openSettings('profiles')),
+		);
+
 		const rect = this.profileButton.getBoundingClientRect();
 		menu.showAtPosition({ x: rect.left, y: rect.bottom + 4 });
 	}

@@ -2219,3 +2219,25 @@
 .obsaide-wikilink-cancelled-text {
 	color: var(--text-warning);
 }
+
+/* "Edit profiles" deep-link highlight: a brief glow on the Profiles section
+   after scrolling to it, so the target is obvious even in a long page. */
+.obsaide-profiles-section {
+	scroll-margin-top: var(--size-4-4);
+}
+
+.obsaide-settings-flash {
+	animation: obsaide-section-flash 1.6s ease-out 1;
+	border-radius: var(--radius-m);
+}
+
+@keyframes obsaide-section-flash {
+	0% {
+		box-shadow: 0 0 0 3px var(--background-modifier-border-focus);
+		background-color: var(--background-modifier-active-hover);
+	}
+	100% {
+		box-shadow: 0 0 0 0 transparent;
+		background-color: transparent;
+	}
+}

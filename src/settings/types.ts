@@ -29,6 +29,17 @@ export const RESPONSE_LENGTHS: readonly ResponseLength[] = ['short', 'normal', '
 /** Every valid context scope, for validation and pickers. */
 export const CONTEXT_SCOPES: readonly ContextScope[] = ['none', 'selection', 'section', 'note', 'linked', 'folder'];
 
+/**
+ * Coerce any stored, migrated or hand-edited value into a valid response
+ * length. `normal` is the canonical default — there is no state in which the
+ * effective length is undefined.
+ */
+export function normalizeResponseLength(value: unknown): ResponseLength {
+	return RESPONSE_LENGTHS.includes(value as ResponseLength)
+		? (value as ResponseLength)
+		: 'normal';
+}
+
 /** Output mode for custom actions. */
 export type CustomActionOutputMode = 'answer' | 'note-ready' | 'rewrite';
 
