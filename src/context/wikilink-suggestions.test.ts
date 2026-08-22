@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
 	applyWikilink,
+	canAnalyzeWikilinks,
 	discoverCandidates,
 	filterExistingLinks,
 	generateSuggestions,
 	isPositionProtected,
 	isProposalAlreadyLinked,
 	parseWikilinkProposals,
+	planSourceReads,
 	type WikilinkCandidate,
 } from './wikilink-suggestions';
 
@@ -412,5 +414,77 @@ describe('isProposalAlreadyLinked', () => {
 		expect(isProposalAlreadyLinked({ replacement: 'plain sentence' })).toBe(false);
 		expect(isProposalAlreadyLinked({ replacement: 'half [ open' })).toBe(false);
 		expect(isProposalAlreadyLinked({ replacement: 'half ] close' })).toBe(false);
+	});
+});
+
+describe('canAnalyzeWikilinks', () => {
+	const base = { sourceNoteCount: 0, sourceFolderCount: 0 };
+
+	it('enables on a target plus a single source note — no folder required', () => {
+		expect(canAnalyzeWikilinks({ ...base, targetCount: 1, sourceNoteCount: 1 })).toBe(true);
+		expect(canAnalyzeWikilinks({ ...base, targetCount: 1, sourceNoteCount: 3 })).toBe(true);
+	});
+
+	it('enables on folder or vault-root sources', () => {
+		expect(canAnalyzeWikilinks({ ...base, targetCount: 1, sourceFolderCount: 1 })).toBe(true);
+	});
+
+	it('disables without a target, without any source, and while analyzing', () => {
+		expect(canAnalyzeWikilinks({ ...base, targetCount: 0, sourceNoteCount: 2 })).toBe(false);
+		expect(canAnalyzeWikilinks({ ...base, targetCount: 1, sourceNoteCount: 0 })).toBe(false);
+		expect(
+			canAnalyzeWikilinks({ targetCount: 1, sourceNoteCount: 2, sourceFolderCount: 1 }, true),
+		).toBe(false);
+	});
+});
+
+describe('planSourceReads', () => {
+	it('deduplicates notes picked directly and via folders', () => {
+		const plan = planSourceReads({
+			sourceNotePaths: ['a.md', 'b.md'],
+			folderNotePaths: ['b.md', 'c.md', 'a.md'],
+			targetPaths: [],
+			maxTotalChars: 1000,
+			sizeOf: () => 10,
+		});
+		expect(plan.paths).toEqual(['a.md', 'b.md', 'c.md']);
+		expect(plan.totalChars).toBe(30);
+	});
+
+	it('excludes targets from the source payload — their content travels as the target', () => {
+		const plan = planSourceReads({
+			sourceNotePaths: ['target.md', 'source.md'],
+			folderNotePaths: ['target.md', 'other.md'],
+			targetPaths: ['target.md'],
+			maxTotalChars: 1000,
+			sizeOf: () => 10,
+		});
+		expect(plan.paths).toEqual(['source.md', 'other.md']);
+	});
+
+	it('applies the context budget before any read happens, via metadata sizes', () => {
+		const sizes: Record<string, number> = { small1: 10, small2: 10, big: 100, small3: 10 };
+		const plan = planSourceReads({
+			sourceNotePaths: ['small1', 'big', 'small2', 'small3'],
+			folderNotePaths: [],
+			targetPaths: [],
+			maxTotalChars: 30,
+			sizeOf: path => sizes[path] ?? 0,
+		});
+		// The oversized note is skipped so smaller later notes can still fit.
+		expect(plan.paths).toEqual(['small1', 'small2', 'small3']);
+		expect(plan.totalChars).toBe(30);
+		expect(plan.omittedCount).toBe(1);
+	});
+
+	it('is deterministic: same inputs produce the same plan', () => {
+		const make = () => planSourceReads({
+			sourceNotePaths: ['x.md', 'y.md'],
+			folderNotePaths: ['y.md'],
+			targetPaths: [],
+			maxTotalChars: 50,
+			sizeOf: () => 5,
+		});
+		expect(make()).toEqual(make());
 	});
 });

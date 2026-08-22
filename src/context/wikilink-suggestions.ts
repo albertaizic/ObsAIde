@@ -350,3 +350,79 @@ export function parseWikilinkProposals(response: string): WikilinkProposal[] {
 export function isProposalAlreadyLinked(proposal: Pick<WikilinkProposal, 'replacement'>): boolean {
 	return proposal.replacement.includes('[') && proposal.replacement.includes(']');
 }
+
+/** What the setup modal has selected, expressed as counts. */
+export interface WikilinkSelectionCounts {
+	targetCount: number;
+	sourceNoteCount: number;
+	sourceFolderCount: number;
+}
+
+/**
+ * The single authority on whether analysis may start: at least one target,
+ * at least one source (a note OR a folder OR the vault root — a folder is
+ * never required), and nothing currently running. The Analyze button and any
+ * other gate must ask this; do not re-derive the rule in the UI.
+ */
+export function canAnalyzeWikilinks(
+	counts: WikilinkSelectionCounts,
+	isAnalyzing = false,
+): boolean {
+	if (isAnalyzing) return false;
+	if (counts.targetCount < 1) return false;
+	return counts.sourceNoteCount + counts.sourceFolderCount >= 1;
+}
+
+export interface SourcePlan {
+	/** Canonical, deduplicated paths whose content should be read. */
+	paths: string[];
+	/** Sum of planned file sizes. */
+	totalChars: number;
+	/** How many candidate notes were left out by the budget. */
+	omittedCount: number;
+}
+
+export interface SourcePlanInput {
+	/** Directly picked source notes, in pick order. */
+	sourceNotePaths: readonly string[];
+	/** Markdown paths expanded from source folders / vault root. */
+	folderNotePaths: readonly string[];
+	/** Target notes: supplied to the model separately, excluded here. */
+	targetPaths: readonly string[];
+	maxTotalChars: number;
+	/** File size lookup that must not read content (metadata only). */
+	sizeOf: (path: string) => number;
+}
+
+/**
+ * Decide what gets read BEFORE anything is read: canonicalize and deduplicate
+ * paths once, drop targets (their content already travels as the target),
+ * then greedily take notes in order until the character budget is spent.
+ *
+ * A note larger than the entire budget is skipped rather than blocking the
+ * smaller notes behind it. Deterministic: same inputs, same plan.
+ */
+export function planSourceReads(input: SourcePlanInput): SourcePlan {
+	const seen = new Set<string>();
+	const targets = new Set(input.targetPaths);
+	const ordered: string[] = [];
+	for (const path of [...input.sourceNotePaths, ...input.folderNotePaths]) {
+		if (seen.has(path) || targets.has(path)) continue;
+		seen.add(path);
+		ordered.push(path);
+	}
+
+	let totalChars = 0;
+	let omittedCount = 0;
+	const paths: string[] = [];
+	for (const path of ordered) {
+		const size = Math.max(0, input.sizeOf(path));
+		if (totalChars + size > input.maxTotalChars) {
+			omittedCount++;
+			continue;
+		}
+		totalChars += size;
+		paths.push(path);
+	}
+	return { paths, totalChars, omittedCount };
+}

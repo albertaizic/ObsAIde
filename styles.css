@@ -2241,3 +2241,50 @@
 		background-color: transparent;
 	}
 }
+
+/* Wikilink workflow states -------------------------------------------------- */
+
+/* Real operation stage under the spinner while a run is live. */
+.obsaide-wikilink-setup-stage {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+/* What the current run is working on. */
+.obsaide-wikilink-run-summary {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	margin-top: var(--size-4-3);
+}
+
+/* Result list after analysis finishes (modal stays open). */
+.obsaide-wikilink-result-summary {
+	margin-bottom: var(--size-4-2);
+}
+
+.obsaide-wikilink-result-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-3);
+	max-height: 45vh;
+	overflow-y: auto;
+}
+
+.obsaide-wikilink-result-item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	padding: var(--size-4-2);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+}
+
+.obsaide-wikilink-error {
+	padding: var(--size-4-2);
+	border-radius: var(--radius-s);
+	background-color: var(--background-modifier-error);
+	color: var(--text-error);
+	margin-bottom: var(--size-4-2);
+}

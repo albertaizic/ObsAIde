@@ -1,7 +1,7 @@
 import { MarkdownView, TFile, TFolder, type App, type Editor } from 'obsidian';
 import { createId } from '../utils/id';
 import { summarize } from '../utils/text';
-import { folderDisplayName, selectFolderNotePaths } from './folder';
+import { folderDisplayName, isVaultRootPath, selectFolderNotePaths } from './folder';
 import { createSectionAttachment } from './section';
 import type { Attachment, ContextRole, SectionAttachment } from './types';
 
@@ -115,7 +115,10 @@ export function listNoteFolders(app: App): TFolder[] {
 
 	const folders: TFolder[] = [];
 	for (const entry of app.vault.getAllLoadedFiles()) {
-		if (entry instanceof TFolder && withNotes.has(entry.path)) folders.push(entry);
+		// The root is offered explicitly by pickers ("Vault root"); listing it
+		// here as well would show the same folder twice under two spellings.
+		if (!(entry instanceof TFolder) || isVaultRootPath(entry.path)) continue;
+		if (withNotes.has(entry.path)) folders.push(entry);
 	}
 	return folders.sort((a, b) => a.path.localeCompare(b.path));
 }

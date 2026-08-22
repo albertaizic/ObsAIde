@@ -4,6 +4,8 @@ import {
 	folderDisplayName,
 	isInsideFolder,
 	isMarkdownPath,
+	isVaultRootPath,
+	normalizeFolderPath,
 	selectFolderNotePaths,
 } from './folder';
 
@@ -96,5 +98,33 @@ describe('labels', () => {
 		expect(describeNoteCount(1)).toBe('1 note');
 		expect(describeNoteCount(4)).toBe('4 notes');
 		expect(describeNoteCount(0)).toBe('0 notes');
+	});
+});
+
+describe('normalizeFolderPath', () => {
+	it('canonicalizes every vault-root spelling to the empty string', () => {
+		expect(normalizeFolderPath('')).toBe('');
+		expect(normalizeFolderPath('/')).toBe('');
+		expect(normalizeFolderPath('.')).toBe('');
+		expect(normalizeFolderPath(' / ')).toBe('');
+		expect(normalizeFolderPath('//')).toBe('');
+	});
+
+	it('strips leading and trailing slashes from real folders', () => {
+		expect(normalizeFolderPath('Coursework')).toBe('Coursework');
+		expect(normalizeFolderPath('Coursework/')).toBe('Coursework');
+		expect(normalizeFolderPath('/Coursework')).toBe('Coursework');
+		expect(normalizeFolderPath('/Coursework/Week 1/')).toBe('Coursework/Week 1');
+	});
+
+	it('gives "" and "/" the same identity so a picker can never show the root twice', () => {
+		expect(normalizeFolderPath('')).toBe(normalizeFolderPath('/'));
+	});
+
+	it('reports vault-root paths canonically', () => {
+		expect(isVaultRootPath('')).toBe(true);
+		expect(isVaultRootPath('/')).toBe(true);
+		expect(isVaultRootPath('.')).toBe(true);
+		expect(isVaultRootPath('Coursework')).toBe(false);
 	});
 });

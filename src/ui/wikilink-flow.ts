@@ -4,22 +4,28 @@ import {
 	isPositionProtected,
 	isProposalAlreadyLinked,
 	parseWikilinkProposals,
+	planSourceReads,
 	type WikilinkProposal,
 } from '../context/wikilink-suggestions';
+import { isInsideFolder, isMarkdownPath } from '../context/folder';
 import type ObsAidePlugin from '../main';
 import { buildWikilinkSystemPrompt, buildWikilinkUserPrompt } from '../prompts/wikilinks';
 import {
 	WikilinkSetupModal,
-	type WikilinkFolderSource,
 	type WikilinkSetupOptions,
+	type WikilinkStage,
+	type WikilinkTargetResult,
 } from './wikilink-setup-modal';
 import { EditPreviewModal } from './edit-preview';
 
 /**
- * The "Suggest wikilinks" workflow: pick targets and sources in a modal, run
- * one provider request per target, parse the structured proposals and hand the
- * resulting rewrite to the diff-review modal — nothing touches the note until
- * the user accepts the change there.
+ * The "Suggest wikilinks" workflow.
+ *
+ * The setup modal drives the interaction; this class does the work behind it:
+ * plan what to read (before reading anything), fetch only what is needed,
+ * run one provider request per target while reporting real stages, and hand
+ * per-target proposals back for the in-modal result view. Nothing touches a
+ * note until the user accepts a diff in the review modal.
  */
 export class WikilinkFlow {
 	constructor(
@@ -28,111 +34,108 @@ export class WikilinkFlow {
 	) {}
 
 	async open(): Promise<void> {
-		// Get the active file as default target
 		const activeFile = this.app.workspace.getActiveFile();
 		if (!activeFile) {
 			new Notice('Open a Markdown note to suggest wikilinks.');
 			return;
 		}
 
-		// Open the setup modal to select targets and sources
-		new WikilinkSetupModal(this.app, (options, signal) => {
-			void this.runAnalysis(options, signal);
+		new WikilinkSetupModal(this.app, {
+			analyze: (options, signal, onStage) => this.analyze(options, signal, onStage),
+			onReview: (result) => this.showReview(result.targetFile, result.proposals),
 		}).open();
 	}
 
-	private async runAnalysis(options: WikilinkSetupOptions, signal: AbortSignal): Promise<void> {
-		const selectedTargets = options.targets;
-
-		if (selectedTargets.length === 0) {
-			new Notice('Select at least one target note.');
-			return;
-		}
-
-		const hasSources = options.sources.length > 0 || options.sourceFolders.length > 0;
-		if (!hasSources) {
-			new Notice('Select at least one source note or folder.');
-			return;
-		}
-
-		// Collect all source files
-		const sourceFiles: TFile[] = [];
-		for (const source of options.sources) {
-			sourceFiles.push(source.file);
-		}
-		for (const folder of options.sourceFolders) {
-			const isRoot = (folder as WikilinkFolderSource & { isRoot?: boolean }).isRoot === true;
-			if (isRoot) {
-				// Vault root - add all markdown files
-				const notes = this.app.vault.getMarkdownFiles();
-				sourceFiles.push(...notes);
-			} else {
-				// folder.folder is guaranteed non-null here because isRoot is false
-				const folderRef = folder.folder;
-				if (folderRef) {
-					const notes = this.app.vault.getMarkdownFiles().filter(f =>
-						f.path.startsWith(folderRef.path + '/') || f.path === folderRef.path
-					);
-					sourceFiles.push(...notes);
-				}
-			}
-		}
-
-		// Remove duplicates
-		const uniqueSourceFiles = Array.from(new Map(sourceFiles.map(f => [f.path, f])).values());
-
-		if (uniqueSourceFiles.length === 0) {
-			new Notice('No readable source content found.');
-			return;
-		}
-
-		// For each target, run analysis
-		for (const target of selectedTargets) {
-			if (signal.aborted) return;
-			await this.analyzeTarget(target.file, uniqueSourceFiles, signal);
-		}
-	}
-
-	private async analyzeTarget(targetFile: TFile, sourceFiles: TFile[], signal: AbortSignal): Promise<void> {
-		// Read target content
-		const targetContent = await this.app.vault.cachedRead(targetFile);
-		if (!targetContent.trim()) {
-			new Notice(`Target note "${targetFile.basename}" is empty.`);
-			return;
-		}
-
-		// Read source contents (with budget limits)
+	private async analyze(
+		options: WikilinkSetupOptions,
+		signal: AbortSignal,
+		onStage: (stage: WikilinkStage) => void,
+	): Promise<WikilinkTargetResult[]> {
 		const settings = this.plugin.chat.getSettings();
-		const sourceContents: Array<{ path: string; content: string }> = [];
-		let totalChars = 0;
 		const maxSourceChars = Math.min(settings.maxContextChars, 50000); // Cap for wikilink analysis
 
-		for (const sourceFile of sourceFiles) {
-			if (totalChars >= maxSourceChars) break;
-			try {
-				const content = await this.app.vault.cachedRead(sourceFile);
-				const remaining = maxSourceChars - totalChars;
-				const truncated = content.length > remaining ? content.slice(0, remaining) : content;
-				if (truncated.trim()) {
-					sourceContents.push({ path: sourceFile.path, content: truncated });
-					totalChars += truncated.length;
-				}
-			} catch {
-				// Skip unreadable files
+		// --- preparing ---------------------------------------------------------
+		onStage('preparing');
+
+		// One enumeration of the Markdown index; folders and the root expand
+		// against it without extra vault walks.
+		const markdownFiles = this.app.vault.getMarkdownFiles();
+		const fileByPath = new Map(markdownFiles.map(file => [file.path, file]));
+
+		const folderNotePaths: string[] = [];
+		for (const folder of options.sourceFolders) {
+			if (folder.isRoot === true || !folder.folder) {
+				folderNotePaths.push(...markdownFiles.map(file => file.path));
+				continue;
 			}
+			folderNotePaths.push(
+				...markdownFiles
+					.filter(file => isInsideFolder(file.path, folder.folder!.path))
+					.map(file => file.path),
+			);
 		}
 
-		if (sourceContents.length === 0) {
-			new Notice('No readable source content found.');
-			return;
-		}
+		// Decide what to read BEFORE reading: dedupe, drop targets, apply budget
+		// using file sizes from metadata only.
+		const plan = planSourceReads({
+			sourceNotePaths: options.sources.map(source => source.file.path),
+			folderNotePaths: folderNotePaths.filter(path => isMarkdownPath(path)),
+			targetPaths: options.targets.map(target => target.file.path),
+			maxTotalChars: maxSourceChars,
+			sizeOf: path => fileByPath.get(path)?.stat.size ?? 0,
+		});
 
-		// Build the AI prompt for semantic wikilink analysis
+		// Read only the planned notes; independent reads run concurrently.
+		const contentByPath = new Map<string, string>();
+		await Promise.all(
+			plan.paths.map(async path => {
+				const file = fileByPath.get(path);
+				if (!file) return;
+				try {
+					contentByPath.set(path, await this.app.vault.cachedRead(file));
+				} catch {
+					// Skip unreadable files
+				}
+			}),
+		);
+		if (signal.aborted) return [];
+
+		// --- analyzing ----------------------------------------------------------
+		onStage('analyzing');
+
+		const results: WikilinkTargetResult[] = [];
+		for (const target of options.targets) {
+			if (signal.aborted) return results;
+			results.push(await this.analyzeTarget(target.file, contentByPath, signal));
+		}
+		return results;
+	}
+
+	private async analyzeTarget(
+		targetFile: TFile,
+		contentByPath: Map<string, string>,
+		signal: AbortSignal,
+	): Promise<WikilinkTargetResult> {
+		const targetContent = await this.app.vault.cachedRead(targetFile);
+
+		const empty = (reason?: string): WikilinkTargetResult => {
+			if (reason && !signal.aborted) new Notice(reason);
+			return { targetFile, proposals: [] };
+		};
+
+		if (!targetContent.trim()) return empty(`Target note "${targetFile.basename}" is empty.`);
+
+		// Sources for this target: everything planned except the target itself
+		// (its content travels in the prompt as the target), minus entries that
+		// turned out unreadable or empty on read.
+		const sourceContents = [...contentByPath.entries()]
+			.filter(([path, content]) => path !== targetFile.path && content.trim())
+			.map(([path, content]) => ({ path, content }));
+
+		if (sourceContents.length === 0) return empty('No readable source content found.');
+
 		const systemPrompt = buildWikilinkSystemPrompt();
 		const userPrompt = buildWikilinkUserPrompt(targetFile.path, targetContent, sourceContents);
-
-		// Show loading
-		new Notice('Analyzing connections…');
 
 		try {
 			const result = await this.plugin.providers.complete({
@@ -142,56 +145,50 @@ export class WikilinkFlow {
 				messages: [{ role: 'user', content: userPrompt }],
 				signal,
 			});
+			if (signal.aborted) return { targetFile, proposals: [] };
 
-			// Parse structured suggestions from AI response
 			const suggestions = parseWikilinkProposals(result.text);
-			if (suggestions.length === 0) {
-				new Notice('No useful wikilink connections found.');
-				return;
-			}
-
-			// Filter out existing wikilinks in target
 			const filtered = suggestions.filter(s => !isProposalAlreadyLinked(s));
-
-			// Show review modal using existing diff infrastructure
-			await this.showReview(targetFile, filtered);
+			return { targetFile, proposals: filtered };
 		} catch (error) {
-			new Notice('Wikilink analysis failed: ' + String(error));
+			if (signal.aborted || (error as Error).name === 'AbortError') {
+				return { targetFile, proposals: [] };
+			}
+			throw error;
 		}
 	}
 
-	private async showReview(targetFile: TFile, suggestions: WikilinkProposal[]): Promise<void> {
-		// Read current target content
-		const targetContent = await this.app.vault.cachedRead(targetFile);
+	/** Build the full proposed text and open the existing diff review. */
+	private showReview(targetFile: TFile, proposals: WikilinkProposal[]): void {
+		void (async () => {
+			const targetContent = await this.app.vault.cachedRead(targetFile);
 
-		// Apply all suggestions to create proposed text
-		let proposedText = targetContent;
-		for (const suggestion of suggestions) {
-			if (suggestion.replacement) {
-				const idx = proposedText.toLowerCase().indexOf(suggestion.targetPhrase.toLowerCase());
-				if (idx !== -1 && !isPositionProtected(proposedText, idx)) {
-					proposedText = proposedText.slice(0, idx) + suggestion.replacement + proposedText.slice(idx + suggestion.targetPhrase.length);
+			let proposedText = targetContent;
+			for (const suggestion of proposals) {
+				if (suggestion.replacement) {
+					const idx = proposedText.toLowerCase().indexOf(suggestion.targetPhrase.toLowerCase());
+					if (idx !== -1 && !isPositionProtected(proposedText, idx)) {
+						proposedText = proposedText.slice(0, idx) + suggestion.replacement + proposedText.slice(idx + suggestion.targetPhrase.length);
+					}
+				} else {
+					proposedText = applyWikilink(proposedText, suggestion.targetPhrase, suggestion.linkTarget);
 				}
-			} else {
-				proposedText = applyWikilink(proposedText, suggestion.targetPhrase, suggestion.linkTarget);
 			}
-		}
 
-		// If no changes, notify and return
-		if (proposedText === targetContent) {
-			new Notice('No changes to apply.');
-			return;
-		}
+			if (proposedText === targetContent) {
+				new Notice('No changes to apply.');
+				return;
+			}
 
-		// Show review modal using existing EditPreviewModal infrastructure
-		new EditPreviewModal(this.app, {
-			proposedText,
-			anchor: {
-				path: targetFile.path,
-				cursor: { line: 0, ch: 0 },
-				selection: { from: { line: 0, ch: 0 }, to: { line: 0, ch: 0 }, text: targetContent },
-			},
-			replacesAnchor: true,
-		}).open();
+			new EditPreviewModal(this.app, {
+				proposedText,
+				anchor: {
+					path: targetFile.path,
+					cursor: { line: 0, ch: 0 },
+					selection: { from: { line: 0, ch: 0 }, to: { line: 0, ch: 0 }, text: targetContent },
+				},
+				replacesAnchor: true,
+			}).open();
+		})();
 	}
 }

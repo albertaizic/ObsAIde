@@ -1,4 +1,9 @@
-import { Modal, Notice, type App, type TFile, TFolder, setIcon } from 'obsidian';
+import { Modal, Notice, setTooltip, type App, type TFile, TFolder, setIcon } from 'obsidian';
+import { describeNoteCount, normalizeFolderPath } from '../context/folder';
+import {
+	canAnalyzeWikilinks,
+	type WikilinkProposal,
+} from '../context/wikilink-suggestions';
 import { FolderPickerModal, FolderSource } from './folder-picker';
 import { NotePickerModal } from './note-picker';
 
@@ -22,46 +27,99 @@ export interface WikilinkSetupOptions {
 	sourceFolders: WikilinkFolderSource[];
 }
 
-/** Analysis state for the wikilink modal. */
-type AnalysisState = 'idle' | 'analyzing' | 'cancelled';
+/** One target's outcome: its proposals are already parsed and filtered. */
+export interface WikilinkTargetResult {
+	targetFile: TFile;
+	proposals: WikilinkProposal[];
+}
 
-/** Modal for configuring wikilink analysis: select target notes and source notes/folders. */
+/** Real operation stages, reported while work is actually happening. */
+export type WikilinkStage = 'preparing' | 'analyzing' | 'reviewing';
+
+const STAGE_LABELS: Record<WikilinkStage, string> = {
+	preparing: 'Preparing source material…',
+	analyzing: 'Analyzing with Aide…',
+	reviewing: 'Preparing proposed changes…',
+};
+
+export interface WikilinkSetupCallbacks {
+	/**
+	 * Run the whole analysis. Must observe the signal and report real stages;
+	 * resolves with per-target proposals (possibly empty).
+	 */
+	analyze: (
+		options: WikilinkSetupOptions,
+		signal: AbortSignal,
+		onStage: (stage: WikilinkStage) => void,
+	) => Promise<WikilinkTargetResult[]>;
+	/** Open the existing diff review for one target's proposals. */
+	onReview: (result: WikilinkTargetResult) => void;
+}
+
+type ModalState = 'idle' | 'running' | 'results' | 'error';
+
+/**
+ * The whole wikilink workflow in one modal: pick targets and sources, watch
+ * the real analysis stages, and land on a visible result — success, zero
+ * connections or failure — without the modal ever closing underneath you.
+ *
+ * Only the Analyze button starts work; changing the selection never does.
+ * While running, the selection is frozen and Cancel aborts; a late result
+ * from a cancelled run is discarded by run token and state guard.
+ */
 export class WikilinkSetupModal extends Modal {
-	private readonly onAnalyze: (options: WikilinkSetupOptions, signal: AbortSignal) => void;
+	private readonly callbacks: WikilinkSetupCallbacks;
 	private targets: WikilinkTarget[] = [];
 	private sources: WikilinkSource[] = [];
 	private sourceFolders: WikilinkFolderSource[] = [];
-	private analyzeButton!: HTMLButtonElement;
-	private cancelButton!: HTMLButtonElement;
-	private state: AnalysisState = 'idle';
+	private state: ModalState = 'idle';
+	private stage: WikilinkStage = 'preparing';
+	private results: WikilinkTargetResult[] = [];
+	private errorMessage = '';
 	private abortController: AbortController | null = null;
-	private headerTitleEl!: HTMLElement;
-	private targetsList!: HTMLElement;
-	private sourcesList!: HTMLElement;
-	private stateDisplayEl!: HTMLElement;
+	private runToken = 0;
 
-	constructor(app: App, onAnalyze: (options: WikilinkSetupOptions, signal: AbortSignal) => void) {
+	constructor(app: App, callbacks: WikilinkSetupCallbacks) {
 		super(app);
-		this.onAnalyze = onAnalyze;
+		this.callbacks = callbacks;
 	}
 
 	override onOpen(): void {
+		this.contentEl.addClass('obsaide-wikilink-setup-modal');
+		this.render();
+	}
+
+	private render(): void {
+		this.contentEl.empty();
+		switch (this.state) {
+			case 'idle':
+				this.renderSetup();
+				break;
+			case 'running':
+				this.renderRunning();
+				break;
+			case 'results':
+				this.renderResults();
+				break;
+			case 'error':
+				this.renderError();
+				break;
+		}
+	}
+
+	// --- setup ----------------------------------------------------------------
+
+	private renderSetup(): void {
 		const { contentEl } = this;
-		contentEl.empty();
-		contentEl.addClass('obsaide-wikilink-setup-modal');
+		this.setTitle('Suggest wikilinks');
 
-		// Header
-		const header = contentEl.createDiv({ cls: 'obsaide-wikilink-setup-header' });
-		this.headerTitleEl = header.createEl('h3', { text: 'Suggest wikilinks' });
-
-		// Targets section
 		const targetsSection = contentEl.createDiv({ cls: 'obsaide-wikilink-setup-section' });
 		const targetsHeader = targetsSection.createDiv({ cls: 'obsaide-wikilink-setup-section-header' });
 		targetsHeader.createEl('h4', { text: 'Target notes' });
 		targetsHeader.createSpan({ cls: 'obsaide-wikilink-setup-section-desc', text: 'Notes that will receive new wikilinks' });
 
-		this.targetsList = targetsSection.createDiv({ cls: 'obsaide-wikilink-setup-list' });
-		this.renderTargets();
+		const targetsList = targetsSection.createDiv({ cls: 'obsaide-wikilink-setup-list' });
+		this.renderTargets(targetsList);
 
 		const addTargetBtn = targetsSection.createEl('button', {
 			cls: 'obsaide-button obsaide-button-small',
@@ -69,14 +127,13 @@ export class WikilinkSetupModal extends Modal {
 		});
 		addTargetBtn.addEventListener('click', () => this.addTargetNote());
 
-		// Sources section
 		const sourcesSection = contentEl.createDiv({ cls: 'obsaide-wikilink-setup-section' });
 		const sourcesHeader = sourcesSection.createDiv({ cls: 'obsaide-wikilink-setup-section-header' });
 		sourcesHeader.createEl('h4', { text: 'Source material' });
 		sourcesHeader.createSpan({ cls: 'obsaide-wikilink-setup-section-desc', text: 'Notes and folders to analyze for connections (will not be modified)' });
 
-		this.sourcesList = sourcesSection.createDiv({ cls: 'obsaide-wikilink-setup-list' });
-		this.renderSources();
+		const sourcesList = sourcesSection.createDiv({ cls: 'obsaide-wikilink-setup-list' });
+		this.renderSources(sourcesList);
 
 		const addSourceNoteBtn = sourcesSection.createEl('button', {
 			cls: 'obsaide-button obsaide-button-small',
@@ -90,28 +147,32 @@ export class WikilinkSetupModal extends Modal {
 		});
 		addSourceFolderBtn.addEventListener('click', () => this.addSourceFolder());
 
-		// Action buttons
 		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
-		this.cancelButton = buttons.createEl('button', {
+		const cancelButton = buttons.createEl('button', {
 			cls: 'obsaide-button',
 			text: 'Cancel',
 		});
-		this.cancelButton.addEventListener('click', () => this.handleCancel());
+		cancelButton.addEventListener('click', () => this.close());
 
-		this.analyzeButton = buttons.createEl('button', {
+		const analyzeButton = buttons.createEl('button', {
 			cls: 'obsaide-button is-cta',
 			text: 'Analyze connections',
 		});
-		this.analyzeButton.addEventListener('click', () => this.handleAnalyze());
-
-		this.updateUIForState();
+		analyzeButton.addEventListener('click', () => this.handleAnalyze());
+		// One rule for everyone: the shared validity helper decides.
+		analyzeButton.disabled = !canAnalyzeWikilinks({
+			targetCount: this.targets.length,
+			sourceNoteCount: this.sources.length,
+			sourceFolderCount: this.sourceFolders.length,
+		});
+		if (analyzeButton.disabled) {
+			setTooltip(analyzeButton, 'Add at least one target note and one source');
+		}
 	}
 
-	private renderTargets(): void {
-		this.targetsList.empty();
-
+	private renderTargets(list: HTMLElement): void {
 		if (this.targets.length === 0) {
-			this.targetsList.createDiv({
+			list.createDiv({
 				cls: 'obsaide-wikilink-setup-empty',
 				text: 'No target notes selected. At least one target is required.',
 			});
@@ -120,7 +181,7 @@ export class WikilinkSetupModal extends Modal {
 
 		for (let i = 0; i < this.targets.length; i++) {
 			const target = this.targets[i]!;
-			const item = this.targetsList.createDiv({ cls: 'obsaide-wikilink-setup-item' });
+			const item = list.createDiv({ cls: 'obsaide-wikilink-setup-item' });
 
 			const info = item.createDiv({ cls: 'obsaide-wikilink-setup-info' });
 			info.createDiv({ cls: 'obsaide-wikilink-setup-title', text: target.file.basename });
@@ -133,35 +194,30 @@ export class WikilinkSetupModal extends Modal {
 			setIcon(removeBtn, 'x');
 			removeBtn.addEventListener('click', () => {
 				this.targets.splice(i, 1);
-				this.renderTargets();
-				this.updateAnalyzeButton();
+				this.render();
 			});
 		}
 	}
 
-	private renderSources(): void {
-		this.sourcesList.empty();
-
-		const totalSources = this.sources.length + this.sourceFolders.length;
-		if (totalSources === 0) {
-			this.sourcesList.createDiv({
+	private renderSources(list: HTMLElement): void {
+		if (this.sources.length === 0 && this.sourceFolders.length === 0) {
+			list.createDiv({
 				cls: 'obsaide-wikilink-setup-empty',
-				text: 'No sources selected. Add source notes or folders to analyze.',
+				text: 'No sources selected. A source note alone is enough.',
 			});
 			return;
 		}
 
-		// Source notes
+		// Source notes: one primary label, one muted metadata line, one remove.
 		for (let i = 0; i < this.sources.length; i++) {
 			const source = this.sources[i]!;
-			const item = this.sourcesList.createDiv({ cls: 'obsaide-wikilink-setup-item' });
+			const item = list.createDiv({ cls: 'obsaide-wikilink-setup-item' });
 
 			const info = item.createDiv({ cls: 'obsaide-wikilink-setup-info' });
 			const titleRow = info.createDiv({ cls: 'obsaide-wikilink-setup-title-row' });
 			const icon = titleRow.createSpan({ cls: 'obsaide-wikilink-setup-icon' });
 			setIcon(icon, 'file-text');
 			titleRow.createDiv({ cls: 'obsaide-wikilink-setup-title', text: source.file.basename });
-			titleRow.createSpan({ cls: 'obsaide-wikilink-setup-badge', text: 'Note' });
 			info.createDiv({ cls: 'obsaide-wikilink-setup-path', text: source.file.path });
 
 			const removeBtn = item.createEl('button', {
@@ -171,43 +227,38 @@ export class WikilinkSetupModal extends Modal {
 			setIcon(removeBtn, 'x');
 			removeBtn.addEventListener('click', () => {
 				this.sources.splice(i, 1);
-				this.renderSources();
-				this.updateAnalyzeButton();
+				this.render();
 			});
 		}
 
-		// Source folders (including vault root)
+		// Source folders and the vault root, visually distinct from notes.
 		for (let i = 0; i < this.sourceFolders.length; i++) {
 			const folder = this.sourceFolders[i]!;
 			const isRoot = folder.isRoot === true;
-			const item = this.sourcesList.createDiv({ cls: 'obsaide-wikilink-setup-item' });
+			const item = list.createDiv({ cls: 'obsaide-wikilink-setup-item' });
 
 			const info = item.createDiv({ cls: 'obsaide-wikilink-setup-info' });
 			const titleRow = info.createDiv({ cls: 'obsaide-wikilink-setup-title-row' });
 			const icon = titleRow.createSpan({ cls: 'obsaide-wikilink-setup-icon' });
 			setIcon(icon, isRoot ? 'box' : 'folder');
-			let folderName: string;
-			let folderPath: string;
-			if (isRoot) {
-				folderName = 'Vault root';
-				folderPath = '/';
-			} else {
-				folderName = folder.folder?.name ?? 'Unknown folder';
-				folderPath = folder.folder?.path ?? 'Unknown path';
-			}
-			titleRow.createDiv({ cls: 'obsaide-wikilink-setup-title', text: folderName });
-			titleRow.createSpan({ cls: 'obsaide-wikilink-setup-badge', text: isRoot ? `Vault (${folder.noteCount} notes)` : `Folder (${folder.noteCount} notes)` });
-			info.createDiv({ cls: 'obsaide-wikilink-setup-path', text: folderPath });
+			const name = isRoot ? 'Vault root' : folder.folder?.name ?? 'Unknown folder';
+			const path = isRoot ? '/' : folder.folder?.path ?? 'Unknown path';
+			titleRow.createDiv({ cls: 'obsaide-wikilink-setup-title', text: name });
+			info.createDiv({
+				cls: 'obsaide-wikilink-setup-path',
+				text: isRoot
+					? `${describeNoteCount(folder.noteCount)} · context limits apply`
+					: `${describeNoteCount(folder.noteCount)} · ${path}`,
+			});
 
 			const removeBtn = item.createEl('button', {
 				cls: 'obsaide-wikilink-setup-remove',
-				attr: { 'aria-label': `Remove ${folderName}` },
+				attr: { 'aria-label': `Remove ${name}` },
 			});
 			setIcon(removeBtn, 'x');
 			removeBtn.addEventListener('click', () => {
 				this.sourceFolders.splice(i, 1);
-				this.renderSources();
-				this.updateAnalyzeButton();
+				this.render();
 			});
 		}
 	}
@@ -215,140 +266,224 @@ export class WikilinkSetupModal extends Modal {
 	private addTargetNote(): void {
 		new NotePickerModal(this.app, (file) => {
 			if (this.targets.some(t => t.file.path === file.path)) {
-				new Notice('This note is already a target.');
+				this.notice('This note is already a target.');
 				return;
 			}
+			// A note about to become a target cannot stay a source: its content
+			// reaches the model through the target role only.
+			const sourceIndex = this.sources.findIndex(s => s.file.path === file.path);
+			if (sourceIndex !== -1) this.sources.splice(sourceIndex, 1);
 			this.targets.push({ file });
-			this.renderTargets();
-			this.updateAnalyzeButton();
+			this.render();
 		}).open();
 	}
 
 	private addSourceNote(): void {
 		new NotePickerModal(this.app, (file) => {
-			// Check if already a target
 			if (this.targets.some(t => t.file.path === file.path)) {
-				new Notice('This note is already a target. It cannot also be a source.');
+				this.notice('This note is already a target. It cannot also be a source.');
 				return;
 			}
 			if (this.sources.some(s => s.file.path === file.path)) {
-				new Notice('This note is already a source.');
+				this.notice('This note is already a source.');
 				return;
 			}
 			this.sources.push({ file });
-			this.renderSources();
+			this.render();
 		}).open();
 	}
 
 	private addSourceFolder(): void {
 		new FolderPickerModal(this.app, (folderSource: FolderSource) => {
-			if (folderSource.isRoot) {
-				if (this.sourceFolders.some(f => (f as WikilinkFolderSource & { isRoot?: boolean }).isRoot)) {
-					new Notice('Vault root is already a source.');
-					return;
-				}
+			const key = normalizeFolderPath(folderSource.path);
+			if (this.sourceFolders.some(f => normalizeFolderPath(f.folder?.path ?? (f.isRoot ? '/' : '')) === key)) {
+				this.notice(key === '' ? 'Vault root is already a source.' : 'This folder is already a source.');
+				return;
+			}
+			if (folderSource.isRoot || key === '') {
 				const noteCount = this.app.vault.getMarkdownFiles().length;
-				const rootEntry: WikilinkFolderSource = { folder: null, noteCount, isRoot: true };
-				this.sourceFolders.push(rootEntry);
+				this.sourceFolders.push({ folder: null, noteCount, isRoot: true });
 			} else {
-				if (this.sourceFolders.some(f => f.folder?.path === folderSource.path)) {
-					new Notice('This folder is already a source.');
-					return;
-				}
 				const resolved = this.app.vault.getAbstractFileByPath(folderSource.path);
 				if (resolved instanceof TFolder) {
 					this.sourceFolders.push({ folder: resolved, noteCount: folderSource.noteCount });
 				}
 			}
-			this.renderSources();
-			this.updateAnalyzeButton();
+			this.render();
 		}).open();
 	}
 
-	private updateAnalyzeButton(): void {
-		const hasTarget = this.targets.length > 0;
-		const hasSource = this.sources.length > 0 || this.sourceFolders.length > 0;
-		this.analyzeButton.disabled = !(hasTarget && hasSource);
-	}
+	// --- running ----------------------------------------------------------------
 
 	private handleAnalyze(): void {
-		this.setState('analyzing');
-		this.abortController = new AbortController();
-		this.onAnalyze({
-			targets: this.targets,
-			sources: this.sources,
-			sourceFolders: this.sourceFolders,
-		}, this.abortController.signal);
+		// Freeze the request; later edits cannot touch a running analysis.
+		const options: WikilinkSetupOptions = {
+			targets: [...this.targets],
+			sources: [...this.sources],
+			sourceFolders: [...this.sourceFolders],
+		};
+		const token = ++this.runToken;
+		const abortController = new AbortController();
+		this.abortController = abortController;
+		this.stage = 'preparing';
+		this.state = 'running';
+		this.render();
+
+		void this.callbacks
+			.analyze(options, abortController.signal, (stage) => {
+				if (this.isLive(token)) {
+					this.stage = stage;
+					this.updateStageLabel();
+				}
+			})
+			.then((results) => {
+				if (!this.isLive(token)) return; // cancelled or superseded
+				this.results = results;
+				this.state = 'results';
+				this.render();
+			})
+			.catch((error: unknown) => {
+				if (!this.isLive(token)) return;
+				if (abortController.signal.aborted) {
+					this.state = 'idle';
+					this.render();
+					return;
+				}
+				this.errorMessage = String(error);
+				this.state = 'error';
+				this.render();
+			});
+	}
+
+	/** A run is live only if it is still the newest one and still running. */
+	private isLive(token: number): boolean {
+		return token === this.runToken && this.state === 'running';
+	}
+
+	private renderRunning(): void {
+		this.setTitle('Analyzing connections…');
+		const { contentEl } = this;
+
+		const status = contentEl.createDiv({ cls: 'obsaide-wikilink-setup-state' });
+		status.createDiv({ cls: 'obsaide-spinner' });
+		this.stageLabelEl = status.createSpan({
+			cls: 'obsaide-wikilink-setup-stage',
+			text: STAGE_LABELS[this.stage],
+		});
+
+		// What the run is actually working on.
+		const summary = contentEl.createDiv({ cls: 'obsaide-wikilink-run-summary' });
+		const targetNames = this.targets.map(t => t.file.basename).join(', ');
+		const sourceCount = this.sources.length + this.sourceFolders.length;
+		summary.createDiv({
+			cls: 'obsaide-wikilink-setup-path',
+			text: `Targets: ${targetNames}`,
+		});
+		summary.createDiv({
+			cls: 'obsaide-wikilink-setup-path',
+			text: `Sources: ${sourceCount} selected`,
+		});
+
+		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
+		const cancelButton = buttons.createEl('button', {
+			cls: 'obsaide-button',
+			text: 'Cancel',
+		});
+		cancelButton.addEventListener('click', () => this.handleCancel());
+	}
+
+	private stageLabelEl!: HTMLElement;
+
+	private updateStageLabel(): void {
+		this.stageLabelEl?.setText(STAGE_LABELS[this.stage]);
 	}
 
 	private handleCancel(): void {
-		if (this.state === 'analyzing') {
-			this.setState('cancelled');
-			this.abortController?.abort();
-			window.setTimeout(() => {
-				this.setState('idle');
-			}, 100);
-		} else {
-			this.close();
-		}
+		// Bump the token first: any in-flight completion is dead on arrival.
+		this.runToken++;
+		this.abortController?.abort();
+		this.abortController = null;
+		this.state = 'idle';
+		this.render();
 	}
 
-	private setState(state: AnalysisState): void {
-		this.state = state;
-		this.updateUIForState();
-	}
+	// --- results / error --------------------------------------------------------
 
-	private updateUIForState(): void {
-		const isAnalyzing = this.state === 'analyzing';
+	private renderResults(): void {
+		this.setTitle('Wikilink connections');
+		const { contentEl } = this;
 
-		// Update title
-		if (isAnalyzing) {
-			this.headerTitleEl.setText('Analyzing connections…');
-		} else if (this.state === 'cancelled') {
-			this.headerTitleEl.setText('Analysis cancelled');
-		} else {
-			this.headerTitleEl.setText('Suggest wikilinks');
-		}
-
-		// Show/hide state display
-		if (!this.stateDisplayEl) {
-			this.stateDisplayEl = this.contentEl.createDiv({ cls: 'obsaide-wikilink-setup-state' });
-		}
-
-		if (isAnalyzing) {
-			this.stateDisplayEl.removeClass('is-hidden');
-			this.stateDisplayEl.empty();
-			this.stateDisplayEl.createDiv({ cls: 'obsaide-spinner' });
-			this.stateDisplayEl.createSpan({ text: 'Aide is comparing the target content with the selected source material and looking for meaningful connections.' });
-		} else if (this.state === 'cancelled') {
-			this.stateDisplayEl.removeClass('is-hidden');
-			this.stateDisplayEl.empty();
-			this.stateDisplayEl.createSpan({ text: 'Analysis cancelled.', cls: 'obsaide-wikilink-cancelled-text' });
-			window.setTimeout(() => {
-				if (this.stateDisplayEl) this.stateDisplayEl.addClass('is-hidden');
-			}, 1500);
-		} else {
-			this.stateDisplayEl.addClass('is-hidden');
-		}
-
-		// Update buttons
-		this.analyzeButton.disabled = this.state !== 'idle';
-		this.analyzeButton.setText(this.state === 'analyzing' ? 'Analyzing…' : 'Analyze connections');
-
-		// Cancel button text
-		this.cancelButton.setText(this.state === 'analyzing' ? 'Cancel analysis' : 'Cancel');
-
-		// Disable inputs during analysis
-		const inputs = this.contentEl.querySelectorAll('input, button:not(.obsaide-modal-footer button)');
-		inputs.forEach(el => {
-			(el as HTMLInputElement | HTMLButtonElement).disabled = this.state === 'analyzing';
+		const total = this.results.reduce((sum, r) => sum + r.proposals.length, 0);
+		const summary = contentEl.createDiv({ cls: 'obsaide-wikilink-result-summary' });
+		summary.createSpan({
+			cls: 'obsaide-wikilink-setup-path',
+			text:
+				total === 0
+					? 'No meaningful wikilink connections found.'
+					: `${total} meaningful connection${total === 1 ? '' : 's'} found`,
 		});
+
+		const list = contentEl.createDiv({ cls: 'obsaide-wikilink-result-list' });
+		for (const result of this.results) {
+			const row = list.createDiv({ cls: 'obsaide-wikilink-result-item' });
+			const info = row.createDiv({ cls: 'obsaide-wikilink-setup-info' });
+			info.createDiv({ cls: 'obsaide-wikilink-setup-title', text: result.targetFile.basename });
+			const count = result.proposals.length;
+			info.createDiv({
+				cls: 'obsaide-wikilink-setup-path',
+				text: count === 0 ? 'No connections' : `${count} meaningful connection${count === 1 ? '' : 's'}`,
+			});
+
+			const review = row.createEl('button', {
+				cls: 'obsaide-button is-small',
+				text: 'Review proposed changes',
+			});
+			review.disabled = count === 0;
+			review.addEventListener('click', () => {
+				// The diff review opens on top; this modal stays put underneath.
+				this.callbacks.onReview(result);
+			});
+		}
+
+		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
+		const back = buttons.createEl('button', { cls: 'obsaide-button', text: 'Back' });
+		back.addEventListener('click', () => {
+			this.state = 'idle';
+			this.render();
+		});
+		const close = buttons.createEl('button', { cls: 'obsaide-button is-cta', text: 'Close' });
+		close.addEventListener('click', () => this.close());
+	}
+
+	private renderError(): void {
+		this.setTitle('Analysis failed');
+		const { contentEl } = this;
+
+		const box = contentEl.createDiv({ cls: 'obsaide-wikilink-error' });
+		box.createSpan({
+			cls: 'obsaide-wikilink-setup-path',
+			text: this.errorMessage || 'The analysis failed for an unknown reason.',
+		});
+
+		const buttons = contentEl.createDiv({ cls: 'obsaide-modal-footer is-actions' });
+		const back = buttons.createEl('button', { cls: 'obsaide-button', text: 'Back' });
+		back.addEventListener('click', () => {
+			this.state = 'idle';
+			this.render();
+		});
+		const retry = buttons.createEl('button', { cls: 'obsaide-button is-cta', text: 'Retry' });
+		retry.addEventListener('click', () => this.handleAnalyze());
+	}
+
+	private notice(message: string): void {
+		new Notice(message);
 	}
 
 	override onClose(): void {
-		if (this.state === 'analyzing') {
-			this.abortController?.abort();
-		}
+		// Leaving the modal kills any run for good.
+		this.runToken++;
+		this.abortController?.abort();
+		this.abortController = null;
 		this.contentEl.empty();
 	}
 }

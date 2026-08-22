@@ -21,6 +21,23 @@ function isRoot(folderPath: string): boolean {
 }
 
 /**
+ * Canonical folder identity: no leading/trailing slashes, no "." spelling,
+ * and the vault root is always the empty string. Two paths are the same
+ * folder iff their normalized forms are equal — "" and "/" must never
+ * produce two entries in a picker or a selection.
+ */
+export function normalizeFolderPath(folderPath: string): string {
+	const trimmed = folderPath.trim();
+	if (trimmed === '' || trimmed === '/' || trimmed === '.') return '';
+	return trimmed.replace(/^\/+|\/+$/g, '');
+}
+
+/** Whether a path denotes the vault root under its canonical identity. */
+export function isVaultRootPath(folderPath: string): boolean {
+	return normalizeFolderPath(folderPath) === '';
+}
+
+/**
  * Whether a file sits inside a folder, at any depth.
  *
  * The trailing separator matters: `Coursework2/notes.md` is not inside
