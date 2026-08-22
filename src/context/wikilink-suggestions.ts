@@ -1,4 +1,5 @@
 import { type App } from 'obsidian';
+import { stripCodeFence } from '../utils/text';
 
 /** A candidate note for wikilink suggestion. */
 export interface WikilinkCandidate {
@@ -284,4 +285,68 @@ function extractHeadings(content: string): string[] {
 		}
 	}
 	return headings;
+}
+
+/** A wikilink proposal parsed from the model's structured JSON reply. */
+export interface WikilinkProposal {
+	/** Exact phrase in the target note the proposal wants to link. */
+	targetPhrase: string;
+	/** Title of the note to link to. */
+	linkTarget: string;
+	/** Replacement text containing the wikilink, or a rewritten sentence. */
+	replacement: string;
+	/** Why this connection is meaningful. */
+	reason: string;
+	confidence: 'high' | 'medium' | 'low';
+}
+
+const CONFIDENCE_LEVELS: readonly WikilinkProposal['confidence'][] = ['high', 'medium', 'low'];
+
+/**
+ * Parse the model's reply into proposals, dropping every entry that does not
+ * satisfy the shape exactly. A reply that is not JSON at all yields an empty
+ * list — the caller reports "no connections found" rather than guessing.
+ */
+export function parseWikilinkProposals(response: string): WikilinkProposal[] {
+	try {
+		// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- JSON.parse returns any
+		const parsed: { suggestions?: unknown } = JSON.parse(stripCodeFence(response));
+		if (!parsed.suggestions || !Array.isArray(parsed.suggestions)) return [];
+
+		return (parsed.suggestions as unknown[])
+			.map((entry): WikilinkProposal | null => {
+				if (typeof entry !== 'object' || entry === null) return null;
+				const s = entry as Record<string, unknown>;
+				if (
+					typeof s['targetPhrase'] !== 'string' ||
+					typeof s['linkTarget'] !== 'string' ||
+					typeof s['replacement'] !== 'string' ||
+					typeof s['reason'] !== 'string' ||
+					typeof s['confidence'] !== 'string' ||
+					!CONFIDENCE_LEVELS.includes(s['confidence'] as WikilinkProposal['confidence'])
+				) {
+					return null;
+				}
+				return {
+					targetPhrase: s['targetPhrase'],
+					linkTarget: s['linkTarget'],
+					replacement: s['replacement'],
+					reason: s['reason'],
+					confidence: s['confidence'] as WikilinkProposal['confidence'],
+				};
+			})
+			.filter((proposal): proposal is WikilinkProposal => proposal !== null);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Whether a proposal's replacement already carries a wikilink of its own.
+ * Deliberately shallow: the model is told to propose replacements containing
+ * links, so any bracketed replacement is treated as already-linked and shown
+ * to the user rather than double-processed.
+ */
+export function isProposalAlreadyLinked(proposal: Pick<WikilinkProposal, 'replacement'>): boolean {
+	return proposal.replacement.includes('[') && proposal.replacement.includes(']');
 }

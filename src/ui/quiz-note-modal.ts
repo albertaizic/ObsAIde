@@ -1,6 +1,7 @@
 import { Modal, Setting, Notice, type App } from 'obsidian';
-import { FolderPickerModal } from './folder-picker';
+import type { QuizTypeSelection } from '../chat/quiz-format';
 import type { Attachment } from '../context/types';
+import { FolderPickerModal } from './folder-picker';
 
 /** Options for generating a quiz note. */
 export interface QuizNoteOptions {
@@ -9,7 +10,7 @@ export interface QuizNoteOptions {
 	/** Difficulty level. */
 	difficulty: 'easy' | 'medium' | 'hard' | 'mixed';
 	/** Question type. */
-	type: 'short-answer' | 'multiple-choice' | 'true-false' | 'explain' | 'application' | 'mixed';
+	type: QuizTypeSelection;
 	/** Whether to include an answer key. */
 	includeAnswerKey: boolean;
 	/** Name for the quiz note (without .md extension). */
@@ -18,18 +19,6 @@ export interface QuizNoteOptions {
 	folderPath: string;
 	/** Context attachments to base the quiz on. */
 	attachments: Attachment[];
-	/** Whether the modal is in loading state. */
-	isLoading?: boolean;
-}
-
-/** Question in structured quiz data. */
-export interface QuizQuestion {
-	type: 'short-answer' | 'multiple-choice' | 'true-false' | 'explain' | 'application';
-	question: string;
-	options?: string[];
-	correctIndex?: number;
-	answer?: string;
-	explanation?: string;
 }
 
 /** Modal for configuring and creating a quiz note. */

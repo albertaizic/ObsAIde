@@ -16,6 +16,26 @@ export interface ConversationExportOptions {
 	onExport: (result: ConversationExportResult) => void;
 }
 
+/** Result of checking export inputs: either a ready-to-run export or why not. */
+export type ExportValidation =
+	| { valid: true; name: string; folder: string; mode: ExportMode }
+	| { valid: false; reason: 'missing-name' | 'missing-mode' };
+
+/**
+ * Validate the export modal's inputs before anything is written.
+ * The name is trimmed; a missing name or unselected mode blocks the export.
+ */
+export function validateExportInput(
+	rawName: string,
+	rawFolder: string,
+	mode: ExportMode | null,
+): ExportValidation {
+	const trimmedName = rawName.trim();
+	if (!trimmedName) return { valid: false, reason: 'missing-name' };
+	if (!mode) return { valid: false, reason: 'missing-mode' };
+	return { valid: true, name: trimmedName, folder: rawFolder.trim(), mode };
+}
+
 /**
  * Save-conversation-as-note modal.
  *
@@ -127,18 +147,13 @@ export class ConversationExportModal extends Modal {
 	}
 
 	private submit(): void {
-		const trimmedName = this.name.trim();
-		if (!trimmedName) {
-			new Notice('Please enter a note name.');
+		const result = validateExportInput(this.name, this.folder, this.mode);
+		if (!result.valid) {
+			new Notice(result.reason === 'missing-name' ? 'Please enter a note name.' : 'Choose what to include first.');
 			return;
 		}
-		if (!this.mode) {
-			new Notice('Choose what to include first.');
-			return;
-		}
-		const mode = this.mode;
 		this.close();
-		this.options.onExport({ name: trimmedName, folder: this.folder.trim(), mode });
+		this.options.onExport({ name: result.name, folder: result.folder, mode: result.mode });
 	}
 
 	override onClose(): void {

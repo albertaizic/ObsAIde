@@ -41,3 +41,47 @@ export function formatApproxTokens(text: string): string {
 	if (tokens < 1000) return `~${tokens} tokens`;
 	return `~${(tokens / 1000).toFixed(1)}k tokens`;
 }
+
+/** Characters Obsidian forbids in note names on every platform. */
+const FORBIDDEN_NAME_CHARS = /[<>:"/\\|?*]/g;
+
+/** Replace characters that cannot appear in a note name with dashes. */
+export function sanitizeNoteName(name: string): string {
+	return name.replace(FORBIDDEN_NAME_CHARS, '-');
+}
+
+/**
+ * Strip one surrounding Markdown code fence.
+ *
+ * Models habitually wrap JSON payloads in fences despite instructions; both
+ * structured-response parsers run through here first.
+ */
+export function stripCodeFence(text: string): string {
+	let body = text.trim();
+	if (!body.startsWith('```')) return body;
+	const fenceEnd = body.indexOf('\n');
+	if (fenceEnd === -1) return body;
+	body = body.slice(fenceEnd + 1);
+	const endFence = body.lastIndexOf('```');
+	return endFence !== -1 ? body.slice(0, endFence) : body;
+}
+
+/**
+ * First unused `folderPath/name.md`, trying `name 1.md`, `name 2.md`, …
+ *
+ * `exists` is injected so callers hand it `vault.getAbstractFileByPath` and
+ * tests can run without Obsidian.
+ */
+export function uniqueNotePath(
+	folderPath: string,
+	name: string,
+	exists: (path: string) => boolean,
+): string {
+	let counter = 1;
+	let candidate = `${folderPath}/${name}.md`;
+	while (exists(candidate)) {
+		candidate = `${folderPath}/${name} ${counter}.md`;
+		counter++;
+	}
+	return candidate;
+}

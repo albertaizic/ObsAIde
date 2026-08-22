@@ -34,6 +34,38 @@ export interface NoteAttachment {
 const DEFAULT_ROLE: NoteAttachment['role'] = 'primary';
 
 /**
+ * Find the last `@word` trigger that starts at a word boundary, scanning the
+ * text before the cursor. Returns the index of the `@` and the query typed
+ * after it, or null when no trigger is active.
+ */
+export function findTrigger(text: string): { position: number; query: string } | null {
+	// Find the last @ that is at word boundary (start of string or after whitespace)
+	const matches = [...text.matchAll(/(^|\s)@([^\s@]*)$/g)];
+	if (matches.length === 0) return null;
+
+	const lastMatch = matches[matches.length - 1];
+	if (!lastMatch) return null;
+	const fullMatch = lastMatch[0]; // Includes leading whitespace if any
+	const query = lastMatch[2] || ''; // Text after @
+
+	// Position is the index of @ in the full text
+	const matchIndex = text.lastIndexOf(fullMatch) + (fullMatch.length - query.length - 1);
+	return { position: matchIndex, query };
+}
+
+/** Filter note candidates by a case-insensitive path/name substring query. */
+export function filterNoteCandidates<T extends { displayPath: string; name: string }>(
+	candidates: readonly T[],
+	query: string,
+): T[] {
+	const q = query.toLowerCase().trim();
+	if (!q) return [...candidates];
+	return candidates.filter(
+		(c) => c.displayPath.toLowerCase().includes(q) || c.name.toLowerCase().includes(q),
+	);
+}
+
+/**
  * Inline @note autocomplete for the composer.
  *
  * - Triggered by typing @ at the start of a word
@@ -82,7 +114,7 @@ export class NoteAutocomplete {
 		const beforeCursor = text.slice(0, cursorPos);
 
 		// Check if we're at an @ trigger position
-		const triggerMatch = this.findTrigger(beforeCursor);
+		const triggerMatch = findTrigger(beforeCursor);
 		if (triggerMatch) {
 			const { position, query } = triggerMatch;
 			if (!this.isOpen) {
@@ -134,22 +166,6 @@ export class NoteAutocomplete {
 		}
 	}
 
-	/** Find @ trigger in text before cursor. Returns position and query if found. */
-	private findTrigger(text: string): { position: number; query: string } | null {
-		// Find the last @ that is at word boundary (start of string or after whitespace)
-		const matches = [...text.matchAll(/(^|\s)@([^\s@]*)$/g)];
-		if (matches.length === 0) return null;
-
-		const lastMatch = matches[matches.length - 1];
-		if (!lastMatch) return null;
-		const fullMatch = lastMatch[0]; // Includes leading whitespace if any
-		const query = lastMatch[2] || ''; // Text after @
-
-		// Position is the index of @ in the full text
-		const matchIndex = text.lastIndexOf(fullMatch) + (fullMatch.length - query.length - 1);
-		return { position: matchIndex, query };
-	}
-
 	/** Open the autocomplete at the given position. */
 	private open(triggerPos: number, query: string, textarea: HTMLTextAreaElement): void {
 		this.triggerPosition = triggerPos;
@@ -192,16 +208,7 @@ export class NoteAutocomplete {
 
 	/** Filter candidates by search query. */
 	private updateFilter(): void {
-		const query = this.searchQuery.toLowerCase().trim();
-		if (!query) {
-			this.filtered = [...this.candidates];
-		} else {
-			this.filtered = this.candidates.filter((c) => {
-				const pathMatch = c.displayPath.toLowerCase().includes(query);
-				const nameMatch = c.name.toLowerCase().includes(query);
-				return pathMatch || nameMatch;
-			});
-		}
+		this.filtered = filterNoteCandidates(this.candidates, this.searchQuery);
 		this.highlightedIndex = this.filtered.length > 0 ? 0 : -1;
 		this.renderList();
 	}

@@ -7,6 +7,7 @@ import { captureSelection, captureNote, getEditorTarget } from '../context/colle
 import type { Attachment } from '../context/types';
 import { ASSISTANT_NAME } from '../constants';
 import { openAskAide } from '../commands';
+import { isUnchangedSelection } from './inline-selection';
 
 // Type for CodeMirror instance to avoid unsafe any
 interface CodeMirrorInstance {
@@ -59,15 +60,8 @@ export class InlineAideMenu {
 		const from = target.editor.getCursor('from');
 		const to = target.editor.getCursor('to');
 
-		// Debounce: only update position if selection changed significantly
-		if (
-			this.lastSelection &&
-			this.lastEditor === target.editor &&
-			this.lastSelection.from.line === from.line &&
-			this.lastSelection.from.ch === from.ch &&
-			this.lastSelection.to.line === to.line &&
-			this.lastSelection.to.ch === to.ch
-		) {
+		// Debounce: only update position if selection changed
+		if (this.lastEditor === target.editor && isUnchangedSelection(this.lastSelection, { from, to })) {
 			return;
 		}
 
