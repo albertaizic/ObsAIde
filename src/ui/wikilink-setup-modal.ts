@@ -1,4 +1,4 @@
-import { Modal, Notice, type App, type TFile, type TFolder, setIcon } from 'obsidian';
+import { Modal, Notice, type App, type TFile, TFolder, setIcon } from 'obsidian';
 import { FolderPickerModal, FolderSource } from './folder-picker';
 import { NotePickerModal } from './note-picker';
 
@@ -255,7 +255,10 @@ export class WikilinkSetupModal extends Modal {
 					new Notice('This folder is already a source.');
 					return;
 				}
-				this.sourceFolders.push({ folder: folderSource.path as unknown as TFolder, noteCount: folderSource.noteCount });
+				const resolved = this.app.vault.getAbstractFileByPath(folderSource.path);
+				if (resolved instanceof TFolder) {
+					this.sourceFolders.push({ folder: resolved, noteCount: folderSource.noteCount });
+				}
 			}
 			this.renderSources();
 			this.updateAnalyzeButton();

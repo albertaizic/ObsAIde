@@ -1,5 +1,5 @@
-import { Modal, Setting, Notice, type App, type TFolder } from 'obsidian';
-import { FolderPickerModal, FolderSource } from './folder-picker';
+import { Modal, Setting, Notice, type App } from 'obsidian';
+import { FolderPickerModal } from './folder-picker';
 import type { Attachment } from '../context/types';
 
 /** Options for generating a quiz note. */
@@ -258,7 +258,6 @@ export class QuizNoteModal extends Modal {
 
 	/** Set loading state - call from outside to show/hide loading */
 	setLoading(loading: boolean): void {
-		const hasAbortController = !!this.abortController;
 		this.createButton.disabled = loading;
 		this.createButton.setText(loading ? 'Creating quiz…' : 'Create quiz note');
 		this.cancelButton.toggleClass('is-hidden', loading);

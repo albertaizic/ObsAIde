@@ -1,4 +1,4 @@
-import { FuzzySuggestModal, type App, type FuzzyMatch, type TFolder, type TFile, setIcon } from 'obsidian';
+import { FuzzySuggestModal, type App, setIcon } from 'obsidian';
 import { listFolderNotes, listNoteFolders } from '../context/collect';
 import { describeNoteCount, folderDisplayName } from '../context/folder';
 

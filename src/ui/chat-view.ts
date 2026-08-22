@@ -53,7 +53,6 @@ import { MessageList } from './message-list';
 import { NotePickerModal } from './note-picker';
 import { PromptModal } from './prompt-modal';
 import { QuizNoteModal, type QuizNoteOptions } from './quiz-note-modal';
-import { WikilinkSuggestionsModal } from './wikilink-suggestions-modal';
 import { WikilinkSetupModal, WikilinkSetupOptions, WikilinkFolderSource } from './wikilink-setup-modal';
 import { BottomScroller } from './scroller';
 import { isPositionProtected, applyWikilink } from '../context/wikilink-suggestions';
@@ -1455,15 +1454,6 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 			? 'For EACH question, include an "answer" field with the answer text and an "explanation" field with the reasoning.'
 			: 'Do NOT include answers. Set "answer" and "explanation" to null.';
 
-		const typeMap: Record<string, string> = {
-			'short-answer': 'short-answer',
-			'multiple-choice': 'multiple-choice',
-			'true-false': 'true-false',
-			'explain': 'explain',
-			'application': 'application',
-			'mixed': 'mixed',
-		};
-
 		const userPrompt = `${contextBlock}\n\nGenerate a study quiz based ONLY on the provided context.\n\nREQUIREMENTS:\n- Output EXACTLY ${options.questionCount} questions\n- Question types: ${typeInstruction}\n- ${difficultyInstruction}\n- ${answerKeyInstruction}\n- Ground every question in the provided context — do not invent material\n- If context is insufficient for a question, skip that topic but maintain numbering\n\nOUTPUT FORMAT (strict JSON only, no code fences, no extra text):\n{\n  "questions": [\n    {\n      "type": "short-answer|multiple-choice|true-false|explain|application",\n      "question": "Question text here?",\n      "options": ["A. ...", "B. ...", "C. ...", "D. ..."], // only for multiple-choice\n      "correctIndex": 0, // only for multiple-choice (0-3)\n      "answer": "Answer text", // when includeAnswerKey is true\n      "explanation": "Explanation text" // when includeAnswerKey is true\n    }\n  ]\n}\n\nFor "mixed" type, distribute questions across types as evenly as possible (e.g., 5 questions = 1 of each type, 10 = 2 of each, etc.).`;
 
 		try {
@@ -1593,7 +1583,6 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 			if (!parsed.questions || !Array.isArray(parsed.questions)) {
 				return null;
 			}
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- validated above
 			return { questions: parsed.questions as QuizQuestion[] };
 		} catch {
 			return null;

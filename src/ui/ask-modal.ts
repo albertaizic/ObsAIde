@@ -1,4 +1,4 @@
-import { Modal, Platform, setIcon, setTooltip, type App, type TFolder } from 'obsidian';
+import { Modal, Platform, setIcon, setTooltip, type App, TFolder } from 'obsidian';
 import { ASSISTANT_NAME } from '../constants';
 import { captureFolder, captureNote, isDuplicateAttachment } from '../context/collect';
 import type { Attachment } from '../context/types';
@@ -68,7 +68,10 @@ export class AskAideModal extends Modal {
 					const rootFolder = this.app.vault.getRoot();
 					this.addAttachment(captureFolder(this.app, rootFolder, 'supporting'));
 				} else {
-					this.addAttachment(captureFolder(this.app, folderSource.path as unknown as TFolder, 'supporting'));
+					const folder = this.app.vault.getAbstractFileByPath(folderSource.path);
+					if (folder instanceof TFolder) {
+						this.addAttachment(captureFolder(this.app, folder, 'supporting'));
+					}
 				}
 			}).open();
 		});
