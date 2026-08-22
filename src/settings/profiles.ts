@@ -1,29 +1,9 @@
 import type { ProviderId } from '../providers/types';
-import type { ContextScope } from './types';
+import { type AssistantProfile, type ContextScope, type ObsAideSettings, type ResponseLength } from './types';
 
-/** A named, reusable assistant configuration. */
-export interface AssistantProfile {
-	/** Stable unique ID (e.g., 'general', 'tutor', 'custom-123'). */
-	id: string;
-	/** Display name. */
-	name: string;
-	/** Obsidian icon name. */
-	icon: string;
-	/** System prompt instructions for this profile. */
-	instructions: string;
-	/** Optional provider override. If absent, uses global default provider. */
-	providerId?: ProviderId;
-	/** Optional model override. If absent, uses provider's selected model. */
-	model?: string;
-	/** Response length preference. */
-	responseLength: 'short' | 'normal' | 'detailed';
-	/** Whether this profile is available for selection. */
-	enabled: boolean;
-	/** True for built-in profiles (cannot be deleted). */
-	isBuiltIn: boolean;
-	/** Optional default context scope for conversations using this profile. */
-	contextScope?: ContextScope;
-}
+// The canonical profile shape lives in `./types`; re-exported here so profile
+// consumers can import it alongside the registry.
+export type { AssistantProfile };
 
 /** Built-in profile IDs (stable, never change). */
 export const BUILTIN_PROFILE_IDS = [
@@ -174,11 +154,12 @@ export function createCustomProfile(data: {
 	instructions: string;
 	providerId?: ProviderId;
 	model?: string;
-	responseLength: 'short' | 'normal' | 'detailed';
+	responseLength?: ResponseLength;
 	contextScope?: ContextScope;
 }): AssistantProfile {
 	const providerId: ProviderId | undefined = data.providerId;
 	const model: string | undefined = data.model;
+	const responseLength: ResponseLength | undefined = data.responseLength;
 	const contextScope: ContextScope | undefined = data.contextScope;
 	const profile: AssistantProfile = {
 		id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -187,7 +168,7 @@ export function createCustomProfile(data: {
 		instructions: data.instructions.trim(),
 		providerId,
 		model,
-		responseLength: data.responseLength,
+		responseLength,
 		enabled: true,
 		isBuiltIn: false,
 		contextScope,
@@ -195,10 +176,32 @@ export function createCustomProfile(data: {
 	return profile;
 }
 
+/** The settings a conversation actually runs with, after profile overrides. */
+export interface EffectiveSettings {
+	providerId: ProviderId;
+	model: string;
+	responseLength: ResponseLength;
+}
+
+/**
+ * Overlay a profile's optional overrides onto the global defaults.
+ *
+ * An unset (or blank) override falls through to the global value, so a
+ * profile only changes what it explicitly pins. This is the single place
+ * where that precedence is decided; callers must not re-derive it.
+ */
+export function resolveEffectiveSettings(
+	profile: AssistantProfile | undefined,
+	settings: Pick<ObsAideSettings, 'defaultProvider' | 'providers' | 'responseLength'>,
+): EffectiveSettings {
+	const providerId = profile?.providerId ?? settings.defaultProvider;
+	const model = profile?.model?.trim() || settings.providers[providerId].model;
+	const responseLength = profile?.responseLength ?? settings.responseLength;
+	return { providerId, model, responseLength };
+}
+
 /** Profile registry for managing built-in and custom profiles. */
 export class ProfileRegistry {
-	private customProfiles: AssistantProfile[] = [];
-
 	constructor(
 		private readonly getSettings: () => { profiles: AssistantProfile[]; activeProfileId?: string },
 		private readonly saveSettings: () => Promise<void>,
@@ -271,16 +274,18 @@ export class ProfileRegistry {
 		await this.saveSettings();
 	}
 
-	/** Duplicate a built-in profile as a custom one. */
-	async duplicateBuiltin(builtinId: string): Promise<AssistantProfile> {
-		const builtin = getBuiltinProfile(builtinId);
-		if (!builtin) throw new Error(`Built-in profile "${builtinId}" not found`);
+	/** Duplicate a built-in or custom profile as an editable custom one. */
+	async duplicate(profileId: string): Promise<AssistantProfile> {
+		const source = this.get(profileId);
+		if (!source) throw new Error(`Profile "${profileId}" not found`);
 		const custom = createCustomProfile({
-			name: `${builtin.name} (copy)`,
-			icon: builtin.icon,
-			instructions: builtin.instructions,
-			responseLength: builtin.responseLength,
-			contextScope: builtin.contextScope,
+			name: `${source.name} (copy)`,
+			icon: source.icon,
+			instructions: source.instructions,
+			providerId: source.providerId,
+			model: source.model,
+			responseLength: source.responseLength,
+			contextScope: source.contextScope,
 		});
 		await this.add(custom);
 		return custom;

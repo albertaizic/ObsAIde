@@ -1,13 +1,15 @@
 import { ASSISTANT_NAME } from '../constants';
+import type { ResponseLength } from '../settings/types';
+
+// The canonical response-length type lives in `settings/types`; re-exported so
+// prompt consumers can import it alongside `buildSystemPrompt`.
+export type { ResponseLength };
 
 /**
  * All persistent instruction text lives here rather than being scattered
  * through the UI, so prompt wording can be reviewed in one place.
  */
 export type AideMode = 'chat' | 'tutor';
-
-/** User-facing response length preference. */
-export type ResponseLength = 'short' | 'normal' | 'detailed';
 
 /**
  * The default persona.

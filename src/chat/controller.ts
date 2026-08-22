@@ -8,6 +8,7 @@ import { AideError, toAideError } from '../providers/errors';
 import type { ProviderService } from '../providers/service';
 import type { ProviderId } from '../providers/types';
 import { collectSecrets, type ObsAideSettings, type AssistantProfile } from '../settings/types';
+import { DEFAULT_PROFILE_ID, getBuiltinProfile, resolveEffectiveSettings } from '../settings/profiles';
 import {
 	composeUserContent,
 	describeContextTrimming,
@@ -86,16 +87,9 @@ export class ChatController {
 		}
 	}
 
-	/** Get profile by ID from settings. */
+	/** Get the full profile for an ID — built-ins included, not a stub. */
 	private getProfileById(id: string): AssistantProfile | undefined {
-		const settings = this.deps.getSettings();
-		// Check built-in profiles first
-		const builtInProfiles = ['general', 'tutor', 'writer', 'coding-assistant', 'researcher'] as const;
-		if (builtInProfiles.includes(id as typeof builtInProfiles[number])) {
-			return { id, name: id, icon: '', instructions: '', responseLength: 'normal' as const, enabled: true, isBuiltIn: true };
-		}
-		// Check custom profiles
-		return settings.profiles.find(p => p.id === id);
+		return getBuiltinProfile(id) ?? this.deps.getSettings().profiles.find(p => p.id === id);
 	}
 
 	get current(): Conversation {
@@ -149,15 +143,20 @@ export class ChatController {
 	newConversation(): void {
 		this.stop();
 		const settings = this.deps.getSettings();
-		const mode = settings.tutorModeByDefault ? 'tutor' : 'chat';
+		const activeProfileId = settings.activeProfileId ?? DEFAULT_PROFILE_ID;
+		const activeProfile = this.getProfileById(activeProfileId);
+		const mode =
+			activeProfile?.id === 'tutor' || settings.tutorModeByDefault ? 'tutor' : 'chat';
 		// Starting over in an already-empty conversation would just litter the
 		// history with identical blank entries.
 		if (this.conversation.messages.length === 0) {
 			this.conversation.mode = mode;
+			if (!this.conversation.activeProfileId) this.conversation.activeProfileId = activeProfileId;
 			this.emit('conversation');
 			return;
 		}
 		this.conversation = this.deps.store.create(mode);
+		this.conversation.activeProfileId = activeProfileId;
 		this.emit('conversation');
 	}
 
@@ -198,6 +197,19 @@ export class ChatController {
 		this.deps.store.touch(this.conversation);
 		// Not a conversation switch: toggling tutor mode must not yank someone
 		// who is reading back down to the newest message.
+		this.emit('structure');
+	}
+
+	/**
+	 * Pin an already-activated profile onto the open conversation.
+	 *
+	 * Switching profiles in the header changes the global default (future
+	 * conversations) *and* this conversation, which otherwise would keep the
+	 * profile it was created with.
+	 */
+	setConversationProfile(profileId: string): void {
+		this.conversation.activeProfileId = profileId;
+		this.deps.store.touch(this.conversation);
 		this.emit('structure');
 	}
 
@@ -304,8 +316,14 @@ export class ChatController {
 		replacesAnchor?: boolean;
 	}): Promise<void> {
 		const settings = this.deps.getSettings();
-		const providerId = settings.defaultProvider;
-		const model = settings.providers[providerId].model;
+		// The conversation's profile may override provider, model and length;
+		// unset overrides fall through to the global defaults.
+		const activeProfile = this.getProfileById(
+			this.conversation.activeProfileId ?? DEFAULT_PROFILE_ID,
+		);
+		const effective = resolveEffectiveSettings(activeProfile, settings);
+		const providerId = effective.providerId;
+		const model = effective.model;
 
 		// Snapshot the history before the placeholder reply joins the list.
 		const history = toProviderMessages(this.conversation);
@@ -326,12 +344,11 @@ export class ChatController {
 		this.abortController = controller;
 		this.emit('structure');
 
-		const activeProfile = this.getProfileById(this.conversation.activeProfileId ?? 'general');
 		const systemPrompt = buildSystemPrompt({
 			mode: this.conversation.mode,
 			customInstructions: settings.customInstructions,
 			actionInstructions: extra.actionInstructions,
-			responseLength: settings.responseLength,
+			responseLength: effective.responseLength,
 			profileInstructions: activeProfile?.instructions,
 		});
 

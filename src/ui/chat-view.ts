@@ -41,6 +41,7 @@ import { describeScopeStatus } from '../context/status';
 import type { Attachment } from '../context/types';
 import { getProviderDescriptor } from '../providers/catalog';
 import { isProviderConfigured, type ContextScope } from '../settings/types';
+import { resolveEffectiveSettings } from '../settings/profiles';
 import { summarize } from '../utils/text';
 import { AttachmentDetailsModal } from './attachment-details';
 import { Composer } from './composer';
@@ -434,7 +435,9 @@ export class AideChatView extends ItemView {
 					.setChecked(profile.id === this.plugin.profiles.getActive().id)
 					.onClick(async () => {
 						await this.plugin.profiles.setActive(profile.id);
-						this.updateProfileButton();
+						// The switch also applies to the open conversation, not
+						// just to conversations created from now on.
+						this.controller.setConversationProfile(profile.id);
 					}),
 			);
 		}
@@ -1293,10 +1296,15 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 	}
 
 	private updateHeader(): void {
-		const providerId = this.controller.providerId;
-		const configured = isProviderConfigured(this.plugin.settings, providerId);
+		const settings = this.controller.getSettings();
+		// Show what a turn would actually use: the conversation's profile may
+		// pin provider, model or response length over the global defaults.
+		const profile = this.plugin.profiles.get(this.controller.current.activeProfileId ?? '');
+		const effective = resolveEffectiveSettings(profile, settings);
+		const providerId = effective.providerId;
+		const configured = isProviderConfigured(settings, providerId);
 		const label = this.plugin.providers.label(providerId);
-		const model = this.controller.model || 'Choose a model';
+		const model = effective.model || 'Choose a model';
 
 		// Update conversation title
 		const conversation = this.controller.current;
@@ -1308,8 +1316,7 @@ Analyze the TARGET note against the SOURCE notes. Identify genuine conceptual re
 		this.updateProfileButton();
 
 		// Update length button
-		const settings = this.controller.getSettings();
-		this.composer.setLength(settings.responseLength ?? 'normal');
+		this.composer.setLength(effective.responseLength);
 
 		// Update provider button
 		this.providerButton.setText(label);

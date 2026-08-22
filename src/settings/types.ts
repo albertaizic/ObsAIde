@@ -20,6 +20,15 @@ export type CustomActionContextMode = 'smart' | 'selection' | 'section' | 'note'
 /** Smart context scope selector options. */
 export type ContextScope = 'none' | 'selection' | 'section' | 'note' | 'linked' | 'folder';
 
+/** User-facing response length preference. */
+export type ResponseLength = 'short' | 'normal' | 'detailed';
+
+/** Every valid response length, for validation. */
+const RESPONSE_LENGTHS: readonly ResponseLength[] = ['short', 'normal', 'detailed'];
+
+/** Every valid context scope, for validation. */
+const CONTEXT_SCOPES: readonly ContextScope[] = ['none', 'selection', 'section', 'note', 'linked', 'folder'];
+
 /** Output mode for custom actions. */
 export type CustomActionOutputMode = 'answer' | 'note-ready' | 'rewrite';
 
@@ -55,8 +64,8 @@ export interface AssistantProfile {
 	providerId?: ProviderId;
 	/** Optional model override. If absent, uses provider's selected model. */
 	model?: string;
-	/** Response length preference. */
-	responseLength: 'short' | 'normal' | 'detailed';
+	/** Preferred response length. If absent, uses the global response length. */
+	responseLength?: ResponseLength;
 	/** Whether this profile is available for selection. */
 	enabled: boolean;
 	/** True for built-in profiles (cannot be deleted). */
@@ -86,7 +95,7 @@ export interface ObsAideSettings {
 	/** Cap across all attachments in a single request. */
 	maxContextChars: number;
 	/** Response length preference. */
-	responseLength: 'short' | 'normal' | 'detailed';
+	responseLength: ResponseLength;
 	/** User-defined custom actions. */
 	customActions: CustomAction[];
 	/** Default context scope for new conversations. */
@@ -241,10 +250,8 @@ export function normalizeSettings(raw: unknown): ObsAideSettings {
 				defaults.maxContextChars,
 			),
 		),
-		responseLength: (['short', 'normal', 'detailed'] as const).includes(
-			data['responseLength'] as 'short' | 'normal' | 'detailed',
-		)
-			? (data['responseLength'] as 'short' | 'normal' | 'detailed')
+		responseLength: RESPONSE_LENGTHS.includes(data['responseLength'] as ResponseLength)
+			? (data['responseLength'] as ResponseLength)
 			: defaults.responseLength,
 		customActions: Array.isArray(data['customActions'])
 			? data['customActions'].map((a: unknown) => {
@@ -285,14 +292,14 @@ export function normalizeSettings(raw: unknown): ObsAideSettings {
 					instructions: asString(obj['instructions'], ''),
 					providerId: providerIdRaw && isProviderId(providerIdRaw) ? providerIdRaw : undefined,
 					model: typeof modelRaw === 'string' ? modelRaw : undefined,
-					responseLength: (['short', 'normal', 'detailed'] as const).includes(
-						obj['responseLength'] as 'short' | 'normal' | 'detailed',
-					)
-						? (obj['responseLength'] as 'short' | 'normal' | 'detailed')
-						: 'normal',
+					responseLength: RESPONSE_LENGTHS.includes(obj['responseLength'] as ResponseLength)
+						? (obj['responseLength'] as ResponseLength)
+						: undefined,
 					enabled: asBoolean(obj['enabled'], true),
 					isBuiltIn: asBoolean(obj['isBuiltIn'], false),
-					contextScope: obj['contextScope'] ? asString(obj['contextScope'], '') as ContextScope : undefined,
+					contextScope: CONTEXT_SCOPES.includes(obj['contextScope'] as ContextScope)
+						? (obj['contextScope'] as ContextScope)
+						: undefined,
 				};
 			})
 			: defaults.profiles,
@@ -347,6 +354,7 @@ export function needsMigration(raw: unknown, normalized: ObsAideSettings): boole
 		data['temperature'] !== normalized.temperature ||
 		data['maxOutputTokens'] !== normalized.maxOutputTokens ||
 		data['responseLength'] !== normalized.responseLength ||
+		data['contextScope'] !== normalized.contextScope ||
 		!Array.isArray(data['customActions']) ||
 		!Array.isArray(data['profiles']) ||
 		data['activeProfileId'] !== normalized.activeProfileId
