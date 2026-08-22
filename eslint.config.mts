@@ -22,7 +22,7 @@ export default defineConfig(
 			},
 			parserOptions: {
 				projectService: {
-					allowDefaultProject: ['eslint.config.mts', 'manifest.json'],
+					allowDefaultProject: ['eslint.config.mts', 'vitest.config.ts', 'manifest.json'],
 				},
 				tsconfigRootDir: import.meta.dirname,
 				extraFileExtensions: ['.json'],
@@ -67,6 +67,13 @@ export default defineConfig(
 		files: ['src/providers/obsidian-http.ts'],
 		rules: {
 			'no-restricted-globals': 'off',
+		},
+	},
+	{
+		// Build/test tooling, not shipped plugin code, so Node.js APIs are fine.
+		files: ['vitest.config.ts'],
+		rules: {
+			'obsidianmd/no-nodejs-modules': 'off',
 		},
 	},
 );
