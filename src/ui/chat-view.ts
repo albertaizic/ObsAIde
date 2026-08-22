@@ -430,7 +430,7 @@ export class AideChatView extends ItemView {
 			onDelete: (id) => this.controller.deleteConversation(id),
 			onRename: (id, newTitle) => this.controller.renameConversation(id, newTitle),
 			onBranch: (id) => this.controller.branchFromConversation(id),
-			currentConversationId: this.controller.current.id,
+			getCurrentConversationId: () => this.controller.current.id,
 		}).open();
 	}
 

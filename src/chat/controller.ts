@@ -155,12 +155,23 @@ export class ChatController {
 			this.emit('conversation');
 			return;
 		}
-		this.conversation = this.deps.store.create(mode);
-		this.conversation.activeProfileId = activeProfileId;
+		this.conversation = this.startConversation();
+		this.emit('conversation');
+	}
+
+	/** A brand-new stored conversation carrying the active profile and scope. */
+	private startConversation(): Conversation {
+		const settings = this.deps.getSettings();
+		const activeProfileId = settings.activeProfileId ?? DEFAULT_PROFILE_ID;
+		const activeProfile = this.getProfileById(activeProfileId);
+		const mode =
+			activeProfile?.id === 'tutor' || settings.tutorModeByDefault ? 'tutor' : 'chat';
+		const conversation = this.deps.store.create(mode);
+		conversation.activeProfileId = activeProfileId;
 		// A new conversation starts with its profile's scope, else the global
 		// default. Existing conversations keep whatever scope they stored.
-		this.conversation.contextScope = activeProfile?.contextScope ?? settings.contextScope;
-		this.emit('conversation');
+		conversation.contextScope = activeProfile?.contextScope ?? settings.contextScope;
+		return conversation;
 	}
 
 	openConversation(id: string): void {
@@ -180,9 +191,19 @@ export class ChatController {
 	}
 
 	deleteConversation(id: string): void {
+		const wasCurrent = this.conversation.id === id;
 		this.deps.store.remove(id);
-		if (this.conversation.id === id) this.newConversation();
-		else this.emit('conversation');
+		if (!wasCurrent) {
+			this.emit('conversation');
+			return;
+		}
+		// The open conversation is gone: land on the newest remaining one, or a
+		// fresh empty conversation when the history is now empty. The sidebar
+		// must never keep showing — or referencing — a deleted conversation.
+		this.stop();
+		const fallback = this.deps.store.list()[0];
+		this.conversation = fallback ?? this.startConversation();
+		this.emit('conversation');
 	}
 
 	/** Rename a conversation. */

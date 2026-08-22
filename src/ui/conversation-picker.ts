@@ -9,7 +9,12 @@ export interface ConversationPickerOptions {
 	onDelete?: (id: string) => void;
 	onRename?: (id: string, newTitle: string) => void;
 	onBranch?: (id: string) => void;
-	currentConversationId?: string;
+	/**
+	 * Live handle to the authoritative active conversation. Read at every
+	 * render, so branching, deleting or switching while the modal is open
+	 * always marks whichever conversation the sidebar actually shows.
+	 */
+	getCurrentConversationId?: () => string | undefined;
 }
 
 /** Modal for browsing and managing conversation history. */
@@ -19,7 +24,7 @@ export class ConversationPickerModal extends Modal {
 	private readonly onDelete: ((id: string) => void) | undefined;
 	private readonly onRename: ((id: string, newTitle: string) => void) | undefined;
 	private readonly onBranch: ((id: string) => void) | undefined;
-	private readonly currentConversationId: string | undefined;
+	private readonly getCurrentConversationId: (() => string | undefined) | undefined;
 	private filter = '';
 	private unsubscribe: (() => void) | null = null;
 
@@ -30,7 +35,7 @@ export class ConversationPickerModal extends Modal {
 		this.onDelete = options.onDelete;
 		this.onRename = options.onRename;
 		this.onBranch = options.onBranch;
-		this.currentConversationId = options.currentConversationId;
+		this.getCurrentConversationId = options.getCurrentConversationId;
 	}
 
 	override onOpen(): void {
@@ -60,13 +65,14 @@ export class ConversationPickerModal extends Modal {
 		});
 
 		const searchContainer = header.createDiv({ cls: 'obsaide-conversation-search' });
-		const searchIcon = searchContainer.createSpan({ cls: 'obsaide-search-icon' });
-		setIcon(searchIcon, 'search');
 		const searchInput = searchContainer.createEl('input', {
 			type: 'text',
 			cls: 'obsaide-conversation-search-input',
-			attr: { placeholder: 'Filter conversations…' },
+			attr: { placeholder: 'Filter conversations…', 'aria-label': 'Filter conversations' },
 		});
+		// Decorative magnifier hugging the right edge of the input.
+		const searchIcon = searchContainer.createSpan({ cls: 'obsaide-search-icon' });
+		setIcon(searchIcon, 'search');
 		searchInput.addEventListener('input', () => {
 			this.filter = searchInput.value.trim().toLowerCase();
 			this.renderList();
@@ -85,7 +91,13 @@ export class ConversationPickerModal extends Modal {
 	private listContainer!: HTMLElement;
 
 	private renderList(): void {
+		// Re-rendering clears the node, so hold the reader's place in the list.
+		const scrollTop = this.listContainer.scrollTop;
+
 		this.listContainer.empty();
+		// Read the authoritative active conversation at render time — never a
+		// snapshot taken when the modal opened.
+		const activeId = this.getCurrentConversationId?.() ?? undefined;
 
 		const conversations = this.store.list().filter((conv) => {
 			if (!this.filter) return true;
@@ -102,15 +114,15 @@ export class ConversationPickerModal extends Modal {
 		}
 
 		for (const conversation of conversations) {
-			this.renderConversationItem(conversation);
+			this.renderConversationItem(conversation, conversation.id === activeId);
 		}
+
+		this.listContainer.scrollTop = scrollTop;
 	}
 
-	private renderConversationItem(conversation: Conversation): void {
+	private renderConversationItem(conversation: Conversation, isCurrent: boolean): void {
 		const item = this.listContainer.createDiv({ cls: 'obsaide-conversation-item' });
 		item.dataset.id = conversation.id;
-
-		const isCurrent = conversation.id === this.currentConversationId;
 
 		// Main content (clickable to open)
 		const main = item.createDiv({ cls: 'obsaide-conversation-main' });
