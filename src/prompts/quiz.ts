@@ -24,7 +24,7 @@ export function getTypeInstruction(type: QuizTypeSelection): string {
 		case 'short-answer':
 			return 'Format: Short answer — open-ended questions';
 		case 'multiple-choice':
-			return 'Format: Multiple choice — each question MUST have 4 options labeled A, B, C, D as a Markdown list:\n- A. Option\n- B. Option\n- C. Option\n- D. Option';
+			return 'Format: Multiple choice — each question MUST have exactly 4 options given as plain option text WITHOUT any letter labels or prefixes';
 		case 'true-false':
 			return 'Format: True / False — each question is a statement that is either true or false. For false statements, explain the correction in the answer.';
 		case 'explain':

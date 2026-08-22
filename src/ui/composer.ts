@@ -1,6 +1,7 @@
 import { Menu, setIcon, setTooltip, type App } from 'obsidian';
 import type { Attachment } from '../context/types';
 import {
+	normalizeContextScope,
 	normalizeResponseLength,
 	type ContextScope,
 	type ResponseLength,
@@ -253,7 +254,8 @@ export class Composer {
 			linked: 'Linked notes',
 			folder: 'Folder',
 		};
-		this.scope = scope;
+		// A corrupt history file can carry an out-of-enum scope; never show it.
+		this.scope = normalizeContextScope(scope);
 		const baseLabel = labels[scope];
 		let displayText: string;
 		if (scope === 'none') {

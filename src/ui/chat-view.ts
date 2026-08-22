@@ -129,6 +129,9 @@ export class AideChatView extends ItemView {
 				const settings = this.controller.getSettings();
 				settings.responseLength = length;
 				void this.controller.saveSettings();
+				// Re-derive the label from the effective value immediately: an
+				// active profile pin can legitimately override the pick.
+				this.updateHeader();
 			},
 			onChangeScope: (scope) => {
 				// The scope is a per-conversation choice; the Settings tab decides

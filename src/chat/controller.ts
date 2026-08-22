@@ -148,8 +148,15 @@ export class ChatController {
 		const mode =
 			activeProfile?.id === 'tutor' || settings.tutorModeByDefault ? 'tutor' : 'chat';
 		// Starting over in an already-empty conversation would just litter the
-		// history with identical blank entries.
+		// history with identical blank entries — unless that empty conversation
+		// was orphaned out of the store (e.g. by "Delete conversation history"),
+		// in which case a fresh registration keeps Current and history in step.
 		if (this.conversation.messages.length === 0) {
+			if (!this.deps.store.get(this.conversation.id)) {
+				this.conversation = this.startConversation();
+				this.emit('conversation');
+				return;
+			}
 			this.conversation.mode = mode;
 			if (!this.conversation.activeProfileId) this.conversation.activeProfileId = activeProfileId;
 			this.emit('conversation');
@@ -175,6 +182,8 @@ export class ChatController {
 	}
 
 	openConversation(id: string): void {
+		// Re-selecting the open conversation must not abort a running reply.
+		if (id === this.conversation.id) return;
 		const conversation = this.deps.store.get(id);
 		if (!conversation) return;
 		this.stop();
@@ -194,7 +203,9 @@ export class ChatController {
 		const wasCurrent = this.conversation.id === id;
 		this.deps.store.remove(id);
 		if (!wasCurrent) {
-			this.emit('conversation');
+			// The sidebar shows an unchanged transcript — emitting nothing avoids
+			// scroll-yanking it or recapturing context. The Recent Conversations
+			// modal refreshes through its own store subscription.
 			return;
 		}
 		// The open conversation is gone: land on the newest remaining one, or a

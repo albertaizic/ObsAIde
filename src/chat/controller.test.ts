@@ -244,7 +244,20 @@ describe('deleteConversation', () => {
 
 		expect(controller.current.id).toBe(currentId);
 		expect(store.get(currentId)).toBeDefined();
-		expect(reasons).toEqual(['conversation']);
+		// Nothing about the open transcript changed, so no view-level event.
+		expect(reasons).toEqual([]);
+	});
+
+	it('re-registers an orphaned empty conversation instead of keeping it detached', () => {
+		const { controller, store } = makeHarness();
+		// Simulate Settings → "Delete conversation history": the store empties
+		// while the (empty) current conversation object stays in memory.
+		store.clear();
+
+		controller.newConversation();
+
+		expect(store.get(controller.current.id)).toBeDefined();
+		expect(store.list()).toHaveLength(1);
 	});
 
 	it('deleting the current conversation loads the newest remaining one', () => {

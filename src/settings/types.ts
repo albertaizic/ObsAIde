@@ -40,6 +40,16 @@ export function normalizeResponseLength(value: unknown): ResponseLength {
 		: 'normal';
 }
 
+/**
+ * Coerce any stored or hand-edited value into a valid context scope. `none`
+ * is the canonical default, mirroring {@link normalizeResponseLength}.
+ */
+export function normalizeContextScope(value: unknown): ContextScope {
+	return CONTEXT_SCOPES.includes(value as ContextScope)
+		? (value as ContextScope)
+		: 'none';
+}
+
 /** Output mode for custom actions. */
 export type CustomActionOutputMode = 'answer' | 'note-ready' | 'rewrite';
 

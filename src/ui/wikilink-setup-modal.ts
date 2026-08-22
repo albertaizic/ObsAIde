@@ -307,6 +307,10 @@ export class WikilinkSetupModal extends Modal {
 				const resolved = this.app.vault.getAbstractFileByPath(folderSource.path);
 				if (resolved instanceof TFolder) {
 					this.sourceFolders.push({ folder: resolved, noteCount: folderSource.noteCount });
+				} else {
+					// Renamed or deleted while the picker was open — say so rather
+					// than silently dropping the user's selection.
+					this.notice('That folder is no longer available.');
 				}
 			}
 			this.render();

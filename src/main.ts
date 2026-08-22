@@ -146,7 +146,9 @@ export default class ObsAidePlugin extends Plugin {
 	 * after `open()`. Works whether or not Settings was already open.
 	 */
 	private scrollToSettingsSection(selector: string): void {
-		const container = this.app.workspace.containerEl;
+		// Obsidian mounts the Settings dialog on document.body as a sibling of
+		// workspace.containerEl — searching the workspace never finds it.
+		const container = document.body;
 		let frames = 0;
 		const look = (): void => {
 			const target = container.querySelector<HTMLElement>(selector);

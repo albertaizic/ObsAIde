@@ -258,9 +258,10 @@ describe('quiz prompt instruction fragments', () => {
 		expect(getDifficultyInstruction('mixed')).toContain('vary between easy, medium, and hard');
 	});
 
-	it('covers every type branch', () => {
+	it('covers every type branch and never asks for letter-prefixed options', () => {
 		expect(getTypeInstruction('short-answer')).toContain('Short answer — open-ended');
-		expect(getTypeInstruction('multiple-choice')).toContain('labeled A, B, C, D');
+		expect(getTypeInstruction('multiple-choice')).toContain('exactly 4 options');
+		expect(getTypeInstruction('multiple-choice')).toMatch(/WITHOUT/i);
 		expect(getTypeInstruction('true-false')).toContain('True / False');
 		expect(getTypeInstruction('explain')).toContain('"why" or "how"');
 		expect(getTypeInstruction('application')).toContain('concrete scenario');
@@ -349,5 +350,31 @@ describe('stripChoiceMarker (multiple-choice normalization)', () => {
 		};
 		const markdown = renderQuizMarkdown({ questions: [question] }, true);
 		expect(markdown).toContain('> **B. real answer**');
+	});
+});
+
+describe('quiz data hardening', () => {
+	it('rejects a non-integer correctIndex that would render as undefined', () => {
+		const fractional = multipleChoice({ correctIndex: 1.5 });
+		const result = validateQuizData({ questions: [fractional] }, 1, 'multiple-choice', true);
+		expect(result.valid).toBe(false);
+		expect(result.error).toContain('correctIndex 0-3');
+	});
+
+	it('rejects non-string options before the renderer ever sees them', () => {
+		const withNull = multipleChoice({ options: [null as unknown as string, 'b', 'c', 'd'] });
+		const result = validateQuizData({ questions: [withNull] }, 1, 'multiple-choice', false);
+		expect(result.valid).toBe(false);
+		expect(result.error).toContain('options must be text');
+	});
+
+	it('keeps multi-line answers and explanations inside the answer callout', () => {
+		const stepped = shortAnswer({
+			answer: 'First step.\nSecond step.',
+			explanation: 'Because halving.\nTwice.',
+		});
+		const markdown = renderQuizMarkdown({ questions: [stepped] }, true);
+		expect(markdown).toContain('> First step.\n> Second step.\n');
+		expect(markdown).toContain('> Because halving.\n> Twice.\n');
 	});
 });

@@ -3,6 +3,7 @@ import { parseQuizJson, renderQuizMarkdown, validateQuizData } from '../chat/qui
 import { buildContextBlock } from '../context/resolve';
 import type { Attachment } from '../context/types';
 import type ObsAidePlugin from '../main';
+import { resolveEffectiveResponseLength } from '../settings/profiles';
 import { buildQuizUserPrompt } from '../prompts/quiz';
 import { buildSystemPrompt } from '../prompts/system';
 import { sanitizeNoteName, uniqueNotePath } from '../utils/text';
@@ -57,12 +58,13 @@ export class QuizFlow {
 			return false;
 		}
 
-		// Build the system prompt
+		// Build the system prompt with the SAME effective length the UI shows —
+		// a profile pin wins over the global preference here too.
 		const activeProfile = this.plugin.profiles.getActive();
 		const systemPrompt = buildSystemPrompt({
 			mode: 'chat',
 			customInstructions: settings.customInstructions,
-			responseLength: settings.responseLength,
+			responseLength: resolveEffectiveResponseLength(activeProfile, settings),
 			profileInstructions: activeProfile.instructions,
 		});
 

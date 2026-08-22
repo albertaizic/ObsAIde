@@ -130,7 +130,15 @@ export function validateQuizData(
 			if (!Array.isArray(question.options) || question.options.length !== 4) {
 				return { valid: false, error: `Question ${i + 1} (multiple-choice) must have exactly 4 options` };
 			}
-			if (typeof question.correctIndex !== 'number' || question.correctIndex < 0 || question.correctIndex > 3) {
+			if (!question.options.every(option => typeof option === 'string')) {
+				return { valid: false, error: `Question ${i + 1} (multiple-choice) options must be text` };
+			}
+			if (
+				typeof question.correctIndex !== 'number' ||
+				!Number.isInteger(question.correctIndex) ||
+				question.correctIndex < 0 ||
+				question.correctIndex > 3
+			) {
 				return { valid: false, error: `Question ${i + 1} (multiple-choice) must have correctIndex 0-3` };
 			}
 		}
@@ -146,6 +154,11 @@ export function validateQuizData(
 	}
 
 	return { valid: true };
+}
+
+/** Keep multi-line content inside the callout: every line needs its own "> ". */
+function calloutLine(text: string): string {
+	return text.split('\n').join('\n> ');
 }
 
 /**
@@ -182,12 +195,12 @@ export function renderQuizMarkdown(
 			markdown += `> [!answer]- ✅ Answer\n`;
 			if (q.type === 'multiple-choice' && Array.isArray(q.options) && typeof q.correctIndex === 'number') {
 				const correct = stripChoiceMarker(q.options[q.correctIndex] ?? '');
-				markdown += `> **${letters[q.correctIndex]}. ${correct}**\n`;
-			} else {
-				markdown += `> ${q.answer}\n`;
+				markdown += `> **${letters[q.correctIndex]}. ${calloutLine(correct)}**\n`;
+			} else if (typeof q.answer === 'string') {
+				markdown += `> ${calloutLine(q.answer)}\n`;
 			}
 			if (q.explanation) {
-				markdown += `> ${q.explanation}\n`;
+				markdown += `> ${calloutLine(q.explanation)}\n`;
 			}
 			markdown += '\n';
 		}
